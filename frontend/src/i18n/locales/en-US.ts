@@ -119,6 +119,7 @@ export default {
     sessionInProgress: 'Conversation in progress',
     knowledgeBase: 'Knowledge Base',
     agents: 'Agents',
+    workflows: 'Workflows',
     organizations: 'Shared Spaces',
     newChat: 'New Chat',
     settings: 'System Settings',
@@ -373,6 +374,26 @@ export default {
         submit: {
           title: 'Save the agent',
           desc: 'Click the highlighted confirm button to finish. You can then select this agent in chat.'
+        }
+      }
+    },
+    workflowCreate: {
+      steps: {
+        templates: {
+          title: 'Start from a template',
+          desc: 'A template is a workflow someone already wired up. Pick the one closest to your need, then swap the marked spots for your own knowledge base or tool.'
+        },
+        canvas: {
+          title: 'This is the flow',
+          desc: 'Each box is one step, and the arrows are the order they run in. You can drag boxes to rearrange the picture - that never changes the logic.'
+        },
+        palette: {
+          title: 'Add a step',
+          desc: 'Click a step to drop it on the canvas, then drag a line from the previous box to it.'
+        },
+        inspector: {
+          title: 'Fill in this panel',
+          desc: 'Whatever you select, its required fields appear here. If a field is marked with a red asterisk it must be filled before you can save.'
         }
       }
     },
@@ -5594,6 +5615,7 @@ export default {
       newChat: 'New conversation',
       knowledgeBases: 'Open knowledge bases',
       agents: 'Open agents',
+      workflows: 'Open workflows',
       organizations: 'Open shared spaces',
       settings: 'Open settings',
       productTour: 'Product tour'
@@ -7170,5 +7192,34 @@ export default {
     capabilityRequired: 'Select at least one capability',
     loadFailed: 'Failed to load platform API keys',
     createFailed: 'Failed to create platform API key'
+  },
+  workflow: {
+    title: 'Workflows',
+    subtitle: 'Standardize multi-step processes like retrieval, decision, and response for deterministic results.',
+    createWorkflow: 'Create Workflow',
+    messages: {
+      created: 'Workflow created successfully',
+      deleted: 'Workflow deleted',
+      deleteFailed: 'Failed to delete workflow',
+    },
+    delete: {
+      confirmTitle: 'Delete Workflow',
+      confirmMessage: 'Are you sure you want to delete workflow "{name}"? This action cannot be undone.',
+      confirmButton: 'Confirm Delete',
+    },
+    detail: {
+      title: 'Workflow Details',
+    },
+    empty: {
+      title: 'No workflows yet',
+      description: 'Workflows are best for structured, deterministic tasks. Click "Create Workflow" to get started with templates.',
+      sharedTitle: 'No shared workflows',
+      sharedDescription: 'Workflows shared with you from other spaces will appear here.',
+      favoritesTitle: 'No favorite workflows',
+      favoritesDescription: 'Favorite workflows to access them quickly here.',
+      recentsTitle: 'No recently visited workflows',
+      recentsDescription: 'Recently used workflows will appear here.',
+    },
   }
 }
+

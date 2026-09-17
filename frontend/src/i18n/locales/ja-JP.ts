@@ -119,6 +119,7 @@ export default {
     sessionInProgress: '会話中',
     knowledgeBase: 'ナレッジベース',
     agents: 'エージェント',
+    workflows: 'ワークフロー',
     organizations: '共有スペース',
     newChat: '新しいチャット',
     settings: 'システム設定',
@@ -373,6 +374,26 @@ export default {
         submit: {
           title: 'エージェントを保存',
           desc: 'ハイライトされた確認ボタンをクリックして完了してください。その後、チャットでこのエージェントを選択できます。'
+        }
+      }
+    },
+    workflowCreate: {
+      steps: {
+        templates: {
+          title: 'テンプレートから始める',
+          desc: 'テンプレートは配線済みのワークフローです。近いものを選び、印が付いた箇所を自分のナレッジベースやツールに置き換えるだけです。'
+        },
+        canvas: {
+          title: 'これがフローです',
+          desc: '四角は 1 つのステップ、矢印は実行される順番です。四角はドラッグで動かせますが、並び順が変わるだけで処理の順番は変わりません。'
+        },
+        palette: {
+          title: 'ステップを追加',
+          desc: '左のステップをクリックするとキャンバスに追加されます。前の四角から線を引いてつなげてください。'
+        },
+        inspector: {
+          title: 'ここで設定します',
+          desc: '選んだノードに必要な項目が右側に表示されます。赤いアスタリスクは必須で、未入力のままでは保存できません。'
         }
       }
     },
@@ -5594,6 +5615,7 @@ export default {
       newChat: '新しい会話',
       knowledgeBases: 'ナレッジベースを開く',
       agents: 'エージェントを開く',
+      workflows: 'ワークフローを開く',
       organizations: '共有スペースを開く',
       settings: '設定を開く',
       productTour: 'プロダクトツアー'
@@ -7170,5 +7192,34 @@ export default {
     capabilityRequired: '権限を1つ以上選択してください',
     loadFailed: 'プラットフォームAPIキーの読み込みに失敗しました',
     createFailed: 'プラットフォームAPIキーの作成に失敗しました'
+  },
+  workflow: {
+    title: 'ワークフロー',
+    subtitle: '「検索、判定、回答」などの固定手順を自動化し、確実なプロセスで実行します',
+    createWorkflow: 'ワークフロー作成',
+    messages: {
+      created: 'ワークフローが作成されました',
+      deleted: 'ワークフローが削除されました',
+      deleteFailed: 'ワークフローの削除に失敗しました',
+    },
+    delete: {
+      confirmTitle: 'ワークフローの削除',
+      confirmMessage: 'ワークフロー「{name}」を削除してもよろしいですか？この操作は取り消せません。',
+      confirmButton: '削除を確認',
+    },
+    detail: {
+      title: 'ワークフロー詳細',
+    },
+    empty: {
+      title: 'ワークフローがありません',
+      description: 'ナレッジベース検索後の回答や条件分岐など、決まった手順のタスクに最適です。テンプレートから素早く作成できます。',
+      sharedTitle: '共有ワークフローがありません',
+      sharedDescription: '他のスペースから共有されたワークフローがここに表示されます',
+      favoritesTitle: 'お気に入りのワークフローがありません',
+      favoritesDescription: 'お気に入りに追加したワークフローにすばやくアクセスできます',
+      recentsTitle: '最近アクセスしたワークフローはありません',
+      recentsDescription: '最近使用したワークフローがここに表示されます',
+    },
   }
 }
+

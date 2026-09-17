@@ -98,6 +98,7 @@ type agentService struct {
 	cfg                  *config.Config
 	modelService         interfaces.ModelService
 	mcpServiceService    interfaces.MCPServiceService
+	kbShareService       interfaces.KBShareService
 	mcpManager           *mcp.MCPManager
 	eventBus             *event.EventBus
 	db                   *gorm.DB
@@ -117,6 +118,19 @@ type agentService struct {
 	sandboxResolver      sandbox.TenantSandboxResolver
 	sandboxPinner        *SessionSandboxPinner
 	sandboxPolicy        WorkspaceSandboxPolicy
+	// artifactCollector 在工作流 skill 节点执行完成后收集沙箱产物文件。
+	// 由 DI 容器通过 WithArtifactCollector 注入；nil 时静默跳过收集（无沙箱后端的部署）。
+	artifactCollector *ArtifactCollector
+}
+
+// WithArtifactCollector 把 ArtifactCollector 注入到 agentService，使工作流 skill 节点
+// 执行完成后能够自动收集沙箱产物文件并写入 AgentState.Artifacts。
+//
+// @param collector 已配置好的 ArtifactCollector；nil 时调用本方法无效。
+func (s *agentService) WithArtifactCollector(collector *ArtifactCollector) {
+	if s != nil {
+		s.artifactCollector = collector
+	}
 }
 
 // NewAgentService creates a new agent service
@@ -145,6 +159,8 @@ func NewAgentService(
 	sandboxPolicy WorkspaceSandboxPolicy,
 	browserSkill *browserskill.Manager,
 	userRepo interfaces.UserRepository,
+	kbShareService interfaces.KBShareService,
+	artifactCollector *ArtifactCollector,
 ) interfaces.AgentService {
 	return &agentService{
 		browserSkill:         browserSkill,
@@ -156,6 +172,7 @@ func NewAgentService(
 		fileService:          fileService,
 		chunkService:         chunkService,
 		mcpServiceService:    mcpServiceService,
+		kbShareService:       kbShareService,
 		mcpManager:           mcpManager,
 		eventBus:             eventBus,
 		db:                   db,
@@ -171,6 +188,7 @@ func NewAgentService(
 		sandboxResolver:      sandboxResolver,
 		sandboxPinner:        sandboxPinner,
 		sandboxPolicy:        sandboxPolicy,
+		artifactCollector:    artifactCollector,
 	}
 }
 

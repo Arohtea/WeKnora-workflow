@@ -53,6 +53,39 @@
             </div>
           </div>
 
+          <!-- 工作流仍可直接用于对话，但与普通智能体分组展示。 -->
+          <div v-if="workflowAgents.length > 0 || sharedWorkflowList.length > 0" class="agent-group">
+            <div class="agent-group-title">工作流</div>
+            <div v-for="agent in workflowAgents" :key="agent.id" class="agent-option"
+              :class="{ selected: isMyAgentSelected(agent) }" @mouseenter="onOptionEnter(agent, $event)"
+              @mouseleave="onOptionLeave" @click="selectAgent(agent)">
+              <AgentAvatar :name="agent.name" size="small" />
+              <span class="agent-option-name">{{ agent.name }}</span>
+              <div v-if="getAgentNotReadyLabels(agent).length" class="agent-option-actions">
+                <t-tooltip :content="$t('agent.selector.notReadyHint', { items: formatNotReadyHint(agent) })"
+                  placement="top">
+                  <TIcon name="error-circle" size="14px" class="not-ready-icon" @click.stop />
+                </t-tooltip>
+              </div>
+            </div>
+            <div v-for="shared in sharedWorkflowList" :key="`${shared.agent.id}-${shared.source_tenant_id}`"
+              class="agent-option" :class="{ selected: isSharedAgentSelected(shared) }"
+              @mouseenter="onSharedOptionEnter(shared, $event)" @mouseleave="onOptionLeave"
+              @click="selectSharedAgent(shared)">
+              <AgentAvatar :name="shared.agent.name" size="small" />
+              <span class="agent-option-name">{{ shared.agent.name }}</span>
+              <span class="shared-tag">{{ $t('agent.selector.sharedLabel') }}</span>
+              <div v-if="getAgentNotReadyLabels(shared.agent, String(shared.source_tenant_id)).length"
+                class="agent-option-actions">
+                <t-tooltip
+                  :content="$t('agent.selector.notReadyHint', { items: formatNotReadyHint(shared.agent, String(shared.source_tenant_id)) })"
+                  placement="top">
+                  <TIcon name="error-circle" size="14px" class="not-ready-icon" @click.stop />
+                </t-tooltip>
+              </div>
+            </div>
+          </div>
+
           <!-- 共享给我 -->
           <div v-if="sharedAgentsList.length > 0" class="agent-group">
             <div class="agent-group-title">{{ $t('agent.tabs.sharedToMe') }}</div>
@@ -74,7 +107,7 @@
             </div>
           </div>
 
-          <div v-if="builtinAgents.length === 0 && customAgents.length === 0 && sharedAgentsList.length === 0"
+          <div v-if="builtinAgents.length === 0 && customAgents.length === 0 && workflowAgents.length === 0 && sharedAgentsList.length === 0 && sharedWorkflowList.length === 0"
             class="agent-option empty">
             {{ $t('agent.noAgents') }}
           </div>
@@ -126,8 +159,9 @@
 
           <div class="detail-tags">
             <span class="detail-tag">
-              {{ activeDetail.agent.config?.agent_mode === 'smart-reasoning' ? $t('agent.type.agent') :
-                $t('agent.type.normal') }}
+              {{ activeDetail.agent.config?.agent_type === 'workflow' ? '工作流' :
+                activeDetail.agent.config?.agent_mode === 'smart-reasoning' ? $t('agent.type.agent') :
+                  $t('agent.type.normal') }}
             </span>
             <span v-if="getKbCapability(activeDetail.agent)" class="detail-tag">{{ getKbCapability(activeDetail.agent)
               }}</span>
@@ -262,7 +296,12 @@ const builtinAgents = computed(() => {
   });
 });
 
-const customAgents = computed(() => agentsList.value.filter(a => !a.is_builtin));
+const customAgents = computed(() =>
+  agentsList.value.filter(a => !a.is_builtin && a.config?.agent_type !== 'workflow'),
+);
+const workflowAgents = computed(() =>
+  agentsList.value.filter(a => !a.is_builtin && a.config?.agent_type === 'workflow'),
+);
 
 const toCustomAgent = (agent: SharedAgentInfo['agent']): CustomAgent => ({
   is_builtin: false,
@@ -272,7 +311,13 @@ const toCustomAgent = (agent: SharedAgentInfo['agent']): CustomAgent => ({
 
 const sharedAgentsList = computed<SharedAgentSelection[]>(() =>
   (orgStore.sharedAgents || [])
-    .filter(shared => !shared.disabled_by_me)
+    .filter(shared => !shared.disabled_by_me && shared.agent?.config?.agent_type !== 'workflow')
+    .map(shared => ({ ...shared, agent: toCustomAgent(shared.agent) })),
+);
+
+const sharedWorkflowList = computed<SharedAgentSelection[]>(() =>
+  (orgStore.sharedAgents || [])
+    .filter(shared => !shared.disabled_by_me && shared.agent?.config?.agent_type === 'workflow')
     .map(shared => ({ ...shared, agent: toCustomAgent(shared.agent) })),
 );
 
@@ -526,12 +571,15 @@ const goToSettings = (agent: CustomAgent, sourceTenantId?: string) => {
     return;
   }
   const reasonKeys = getAgentNotReadyReasonKeysFor(agent, sourceTenantId);
-  const section = reasonKeys.length > 0 ? resolveAgentNotReadySection(reasonKeys) : 'basic';
+  const isWorkflow = agent.config?.agent_type === 'workflow';
+  const section = isWorkflow
+    ? 'workflow'
+    : (reasonKeys.length > 0 ? resolveAgentNotReadySection(reasonKeys) : 'basic');
   const highlight = resolveAgentNotReadyHighlight(reasonKeys);
   hideDetailPanel();
   emit('close');
   router.push({
-    path: '/platform/agents',
+    path: isWorkflow ? '/platform/workflows' : '/platform/agents',
     query: {
       edit: agent.id,
       section,

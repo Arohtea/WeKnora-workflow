@@ -49,7 +49,11 @@ type CustomAgentService interface {
 	// avatar carries field presence the agent struct cannot express: nil means
 	// the caller did not send an avatar and the stored one must survive, while
 	// a pointer to "" is an explicit clear.
-	UpdateAgent(ctx context.Context, agent *types.CustomAgent, avatar *string) (*types.CustomAgent, error)
+	// config carries presence the same way and for the same reason: a PUT that
+	// omits it must keep the stored configuration. As a value type, an omitted
+	// config arrived as a zero struct; for a workflow agent that silently
+	// replaced the stored graph with the default "start → end" definition.
+	UpdateAgent(ctx context.Context, agent *types.CustomAgent, avatar *string, config *types.CustomAgentConfig) (*types.CustomAgent, error)
 
 	// DeleteAgent deletes an agent
 	// Parameters:

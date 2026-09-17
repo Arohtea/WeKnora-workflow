@@ -524,6 +524,9 @@ type ResourceCountsByOrgResponse struct {
 	Agents struct {
 		ByOrganization map[string]int `json:"by_organization"`
 	} `json:"agents"`
+	Workflows struct {
+		ByOrganization map[string]int `json:"by_organization"`
+	} `json:"workflows"`
 }
 
 // SearchableOrganizationItem is a searchable org item for discovery (no invite code)

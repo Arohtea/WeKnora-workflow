@@ -12,6 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/types"
+	workflowruntime "github.com/Tencent/WeKnora/internal/workflow"
 )
 
 // AgentQA performs agent-based question answering with conversation history and streaming support
@@ -63,11 +64,28 @@ func (s *sessionService) AgentQA(
 
 	// Ensure defaults are set
 	req.CustomAgent.EnsureDefaults()
+	if req.CustomAgent.Config.AgentType == types.AgentTypeWorkflow {
+		if err := workflowruntime.NormalizeConfig(&req.CustomAgent.Config); err != nil {
+			return err
+		}
+	}
 
 	// Build AgentConfig from custom agent and tenant info
 	agentConfig, err := s.buildAgentConfig(ctx, req, tenantInfo, agentTenantID)
 	if err != nil {
 		return err
+	}
+	if types.IsWorkflowAgent(&req.CustomAgent.Config) {
+		// 工作流节点声明的是固定资源范围，不能被本次请求的 @mention 改写。
+		agentConfig.WebSearchEnabled = req.CustomAgent.Config.WebSearchEnabled
+		agentConfig.KnowledgeBases = append([]string(nil), req.CustomAgent.Config.KnowledgeBases...)
+		agentConfig.KnowledgeIDs = nil
+		agentConfig.SearchTargets, err = s.buildSearchTargets(
+			ctx, agentTenantID, agentConfig.KnowledgeBases, nil, nil,
+		)
+		if err != nil {
+			return fmt.Errorf("build workflow search targets: %w", err)
+		}
 	}
 
 	// Set VLM model ID for tool result image analysis (runtime-only field)
@@ -109,6 +127,10 @@ func (s *sessionService) AgentQA(
 	)
 	logger.Infof(ctx, "Agent context window: %d tokens (model %s declares %d)",
 		agentConfig.MaxContextTokens, effectiveModelID, modelContextWindow)
+
+	if types.IsWorkflowAgent(&req.CustomAgent.Config) {
+		return s.runWorkflowQA(ctx, req, agentConfig, summaryModel, eventBus)
+	}
 
 	// Get rerank model from custom agent config only when knowledge_search can
 	// actually run. A disabled KB scope makes all KB tools ineffective, so it

@@ -64,6 +64,16 @@ export function buildCommands(ctx: CommandContext): CmdkCommand[] {
       },
     },
     {
+      id: 'open-workflows',
+      label: t('commandPalette.quick.workflows'),
+      icon: 'git-branch',
+      keywords: ['workflow', 'flow', '工作流', '编排'],
+      run: () => {
+        close()
+        router.push('/platform/workflows')
+      },
+    },
+    {
       id: 'open-organizations',
       label: t('commandPalette.quick.organizations'),
       icon: 'usergroup',

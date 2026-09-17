@@ -2,7 +2,7 @@
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="visible" class="settings-overlay" @click.self="handleClose">
-        <div class="settings-modal">
+        <div class="settings-modal" :class="{ 'settings-modal--workflow': isWorkflow }">
           <div v-if="editorInitializing" class="editor-initializing" role="status" :aria-label="$t('common.loading')">
             <t-loading size="medium" :text="$t('common.loading')" />
           </div>
@@ -17,8 +17,7 @@
             <!-- 左侧导航 -->
             <div class="settings-sidebar">
               <div class="sidebar-header">
-                <h2 class="sidebar-title">{{ editorMode === 'create' ? $t('agent.editor.createTitle') :
-                  $t('agent.editor.editTitle') }}</h2>
+                <h2 class="sidebar-title">{{ editorTitle }}</h2>
               </div>
               <div class="settings-nav" data-guide="agent-editor-sidebar">
                 <template v-for="group in navGroups" :key="group.key">
@@ -38,7 +37,14 @@
 
             <!-- 右侧内容区域 -->
             <div class="settings-content">
-              <div ref="contentWrapperRef" class="content-wrapper" :class="{ 'content-wrapper--prompts': currentSection === 'prompts' }">
+              <div
+                ref="contentWrapperRef"
+                class="content-wrapper"
+                :class="{
+                  'content-wrapper--prompts': currentSection === 'prompts',
+                  'content-wrapper--workflow': currentSection === 'workflow' && isWorkflow,
+                }"
+              >
                 <!-- 基础设置 -->
                 <div v-show="currentSection === 'basic'" class="section">
                   <div class="section-header">
@@ -96,14 +102,14 @@
                     </div>
 
                     <!-- 运行模式（首先选择） -->
-                    <div class="setting-row">
+                    <div v-if="!isWorkflow" class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.mode') }} <span class="required">*</span></label>
                         <p class="desc">{{ agentMode === 'smart-reasoning' ? $t('agent.editor.agentDesc') :
                           $t('agent.editor.normalDesc') }}</p>
                       </div>
                       <div class="setting-control">
-                        <t-radio-group v-model="agentMode" :disabled="isBuiltinAgent" data-guide="agent-create-mode">
+                        <t-radio-group v-model="agentMode" :disabled="isBuiltinAgent || isWorkflow" data-guide="agent-create-mode">
                           <t-radio-button value="quick-answer">
                             {{ $t('agent.type.normal') }}
                           </t-radio-button>
@@ -115,7 +121,7 @@
                     </div>
 
                     <!-- 智能体类型（仅智能推理模式下显示） -->
-                    <div v-if="isAgentMode && agentTypePresets.length > 0" class="setting-row setting-row--emphasize"
+                    <div v-if="!isWorkflow && isAgentMode && agentTypeSelectOptions.length > 0" class="setting-row setting-row--emphasize"
                       data-guide="agent-create-agent-type">
                       <div class="setting-info">
                         <label>{{ $t('agentEditor.agentType.label') }}</label>
@@ -185,6 +191,42 @@
                     </div>
 
                   </div>
+                </div>
+
+                <!-- 工作流画布（仅工作流智能体） -->
+                <div v-show="currentSection === 'workflow' && isWorkflow" class="section section--workflow">
+                  <div v-if="showWorkflowIntro && showWorkflowContextualGuide" class="workflow-intro">
+                    <t-icon name="info-circle" />
+                    <span>
+                      工作流把回答拆成固定几步：先查知识库、再让模型判断、最后按结论回复。
+                      和普通智能体的区别是——它每次都会按你排好的顺序执行，不会自己临时改主意。
+                      不知道从哪开始，就先用模板。
+                    </span>
+                    <button type="button" class="workflow-intro-dismiss" title="不再显示" @click="showWorkflowIntro = false">
+                      <t-icon name="close" size="14px" />
+                    </button>
+                  </div>
+                  <WorkflowEditor
+                    ref="workflowEditorRef"
+                    v-model="formData.config.workflow"
+                    :catalog="workflowCatalog"
+                    :knowledge-base-options="kbOptions"
+                    :sandbox-config-id="formData.config.sandbox_config_id"
+                    :disabled="isBuiltinAgent || props.readOnly"
+                    @validation-error="workflowValidationMessage = $event"
+                    @select-sandbox="openWorkflowSandboxSelection"
+                    @manage-skills="openSkillSettings"
+                    @manage-knowledge-bases="openWorkflowKnowledgeBaseSelection"
+                    @manage-mcp="openWorkflowMcpSettings"
+                    @run="handleWorkflowRun"
+                  />
+                  <p v-if="workflowCatalogError" class="workflow-catalog-error">
+                    {{ workflowCatalogError }}
+                  </p>
+                  <WorkflowCreateContextualGuide
+                    :when="showWorkflowContextualGuide"
+                    :has-template-gallery="workflowShowsTemplateGallery"
+                  />
                 </div>
 
                 <!-- 提示词 -->
@@ -1785,10 +1827,16 @@
                   <t-button variant="outline" @click="handleClose">{{ props.readOnly ? $t('common.close') :
                     $t('common.cancel')
                     }}</t-button>
+                  <t-button v-if="isWorkflow && !props.readOnly" variant="outline" :loading="workflowRunLoading"
+                    :disabled="saving || editorInitializing" title="保存后打开一个新对话，你可以直接提问验证效果"
+                    @click="handleWorkflowRun">
+                    <t-icon name="play-circle" />
+                    保存并去试用
+                  </t-button>
                   <t-button v-if="!props.readOnly" theme="primary" data-guide="agent-create-submit" :loading="saving"
                     :disabled="editorInitializing"
                     @click="handleSave">{{
-                    saveButtonLabel
+                    editorSaveButtonLabel
                     }}</t-button>
                 </div>
               </div>
@@ -1821,7 +1869,7 @@
     />
   </SettingDrawer>
 
-  <AgentCreateContextualGuide :when="visible && editorMode === 'create'" :is-agent-mode="isAgentMode" />
+  <AgentCreateContextualGuide :when="visible && editorMode === 'create' && !isWorkflowResource" :is-agent-mode="isAgentMode" />
 </template>
 
 <script setup lang="ts">
@@ -1837,8 +1885,10 @@ import { selectInitialModelId } from '@/utils/modelDefaults';
 import { hydrateAgentPromptRefs, serializeAgentPrompts } from '@/utils/agentPromptTemplates';
 import { copyWithToast } from '@/utils/clipboard';
 import { MessagePlugin } from 'tdesign-vue-next';
+import { createSessions } from '@/api/chat';
 import {
   createAgent,
+  getWorkflowCatalog,
   updateAgent,
   listIMChannels,
   type CustomAgent,
@@ -1847,8 +1897,11 @@ import {
   type AgentType,
   type AgentTypeKBFilter,
   type KBCapabilities,
+  type WorkflowCatalog,
+  type WorkflowDefinition,
 } from '@/api/agent';
 import { type ModelConfig } from '@/api/model';
+import { getMCPServiceTools } from '@/api/mcp-service';
 import { type AgentNotReadyReasonKey, agentRequiresRerankModel } from '@/utils/agent-readiness';
 import { installSkillCatalog, type SkillCatalogItem } from '@/api/skill';
 import { type WebSearchProviderEntity } from '@/api/web-search-provider';
@@ -1864,11 +1917,14 @@ import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
 import { useChatResourcesStore } from '@/stores/chatResources';
 import { useEditorResourcesStore } from '@/stores/editorResources';
+import { useMenuStore } from '@/stores/menu';
 import AgentAvatar from '@/components/AgentAvatar.vue';
 import PromptTemplateSelector from '@/components/PromptTemplateSelector.vue';
 import ModelSelector from '@/components/ModelSelector.vue';
 import SandboxSkillsPanel from '@/components/SandboxSkillsPanel.vue';
 import SettingDrawer from '@/components/settings/SettingDrawer.vue';
+import WorkflowEditor from './WorkflowEditor.vue';
+import WorkflowCreateContextualGuide from '@/components/WorkflowCreateContextualGuide.vue';
 import KBParserSettings, { type ParserEngineRule } from '@/views/knowledge/settings/KBParserSettings.vue';
 import AgentShareSettings from '@/components/AgentShareSettings.vue';
 import { SKILL_ICON } from '@/types/mention';
@@ -1895,6 +1951,7 @@ const router = useRouter();
 const orgStore = useOrganizationStore();
 const chatResources = useChatResourcesStore();
 const editorResources = useEditorResourcesStore();
+const menuStore = useMenuStore();
 
 const { t, locale: i18nLocale } = useI18n();
 
@@ -1904,6 +1961,7 @@ const props = defineProps<{
   agent?: CustomAgent | null;
   initialSection?: string;
   initialHighlightField?: string;
+  fixedAgentType?: AgentType;
   // readOnly hides the save button so a Viewer who clicks an agent
   // card to inspect its config doesn't see a "确定" that 403s on the
   // backend update endpoint. Field-level disable is intentionally NOT
@@ -1922,10 +1980,24 @@ const savedAgent = ref<CustomAgent | null>(null);
 const editorMode = computed(() => (savedAgent.value ? 'edit' : props.mode));
 const editorAgent = computed(() => savedAgent.value ?? props.agent ?? null);
 const isPostCreateSession = computed(() => !!savedAgent.value);
+const isWorkflowResource = computed(() =>
+  props.fixedAgentType === 'workflow' || editorAgent.value?.config?.agent_type === 'workflow'
+);
+const editorTitle = computed(() => {
+  if (isWorkflowResource.value) {
+    return editorMode.value === 'create' ? '创建工作流' : '编辑工作流';
+  }
+  return t(editorMode.value === 'create' ? 'agent.editor.createTitle' : 'agent.editor.editTitle');
+});
 const saveButtonLabel = computed(() =>
   editorMode.value === 'create'
     ? t('agent.editor.buttons.create')
     : t('agent.editor.buttons.saveAndClose')
+);
+const editorSaveButtonLabel = computed(() =>
+  isWorkflowResource.value
+    ? (editorMode.value === 'create' ? '创建工作流' : '保存并关闭')
+    : saveButtonLabel.value
 );
 
 const copyAgentId = async () => {
@@ -2025,9 +2097,37 @@ onBeforeUnmount(() => {
 })
 
 const saving = ref(false);
+const workflowRunLoading = ref(false);
 const editorInitializing = ref(false);
 const allModels = ref<ModelConfig[]>([]);
 const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string; ragEnabled?: boolean; wikiEnabled?: boolean; capabilities?: KBCapabilities }[]>([]);
+const workflowEditorRef = ref<WorkflowEditorHandle | null>(null);
+const workflowCatalog = ref<WorkflowCatalog>({ builtin_tools: [], mcp_services: [], skills: [] });
+const workflowCatalogError = ref('');
+const workflowValidationMessage = ref('');
+
+/** WorkflowEditor 通过 defineExpose 暴露给父组件的能力。 */
+interface WorkflowEditorHandle {
+  validate: () => boolean;
+  isUntouched: () => boolean;
+  isTemplateGalleryOpen: () => boolean;
+}
+
+// 只有"新建工作流"才走首次引导：编辑已有工作流的人已经知道这块怎么用了。
+const showWorkflowContextualGuide = computed(() =>
+  props.visible &&
+  isWorkflow.value &&
+  editorMode.value === 'create' &&
+  !isBuiltinAgent.value &&
+  !props.readOnly,
+);
+// 解释文案只在首次接触工作流时出现，避免长期占据画布上方的空间。
+const showWorkflowIntro = ref(true);
+watch(showWorkflowContextualGuide, (val) => {
+  if (val) showWorkflowIntro.value = true;
+});
+// 模板面板占据画布位置时，引导的第一个步骤要指向模板而不是画布。
+const workflowShowsTemplateGallery = computed(() => workflowEditorRef.value?.isTemplateGalleryOpen() ?? false);
 
 // 智能体类型预设（仅 smart-reasoning 模式下展示）
 const agentTypePresets = ref<AgentTypePreset[]>([]);
@@ -2036,7 +2136,6 @@ const agentSystemPromptTemplates = ref<PromptTemplate[]>([]);
 const promptTemplates = ref<PromptTemplatesConfig | null>(null);
 const intentPromptTemplates = ref<PromptTemplate[]>([]);
 type McpSelectOption = { label: string; value: string; disabled?: boolean };
-
 const mcpOptions = computed<McpSelectOption[]>(() => {
   const services = editorResources.mcpServices || [];
   const selectedIds = new Set<string>(formData.value.config.mcp_services || []);
@@ -2658,6 +2757,20 @@ const rewriteUserTextareaRef = ref<any>(null);
 const fallbackPromptTextareaRef = ref<any>(null);
 
 const navItems = computed(() => {
+  if (isWorkflow.value) {
+    const items: { key: string; icon: string; label: string }[] = [
+      { key: 'basic', icon: 'info-circle', label: t('agent.editor.basicInfo') },
+      { key: 'model', icon: 'control-platform', label: t('agent.editor.modelConfig') },
+      { key: 'knowledge', icon: 'folder', label: t('agent.editor.knowledgeConfig') },
+      { key: 'workflow', icon: 'share', label: '流程编排' },
+      { key: 'skills', icon: SKILL_ICON, label: t('agent.editor.skillsConfig') },
+    ];
+    if (editorMode.value === 'edit' && editorAgent.value?.id && !editorAgent.value?.is_builtin && !authStore.isLiteMode) {
+      items.push({ key: 'share', icon: 'share', label: t('knowledgeEditor.sidebar.share') });
+    }
+    return items;
+  }
+
   const items: { key: string; icon: string; label: string }[] = [
     { key: 'basic', icon: 'info-circle', label: t('agent.editor.basicInfo') },
     { key: 'prompts', icon: 'file-paste', label: t('agent.editor.promptsConfig') },
@@ -2701,6 +2814,11 @@ const navGroups = computed(() => {
       key: 'knowledge',
       label: t('agentEditor.navGroups.knowledge'),
       items: pickItems(['knowledge', 'retrieval', 'websearch']),
+    },
+    {
+      key: 'workflow',
+      label: '工作流',
+      items: pickItems(['workflow']),
     },
     {
       key: 'capability',
@@ -2755,6 +2873,7 @@ const defaultFormData = {
     // 智能推理下的类型预设：新建 agent 时默认给 RAG 问答（最常用场景）。
     // 编辑既有 agent 时会被 agent 自己保存的 agent_type 覆盖。
     agent_type: 'rag-qa' as AgentType,
+    workflow: null as WorkflowDefinition | null,
     system_prompt_id: '' as string,
     // 附件上传设置
     image_upload_enabled: false,
@@ -2827,7 +2946,24 @@ const defaultFormData = {
   }
 };
 
+const createDefaultWorkflowDefinition = (): WorkflowDefinition => ({
+  version: 1,
+  nodes: [
+    { id: 'start', type: 'start', name: '开始', position: { x: 80, y: 160 }, config: {} },
+    { id: 'end', type: 'end', name: '结束', position: { x: 420, y: 160 }, config: { text_template: '{{input.query}}' } },
+  ],
+  edges: [{ id: 'start-end', source: 'start', target: 'end', order: 0, is_default: false }],
+  viewport: { x: 0, y: 0, zoom: 1 },
+});
+
 const formData = ref(JSON.parse(JSON.stringify(defaultFormData)));
+
+const ensureWorkflowDefinition = () => {
+  if (!formData.value.config.workflow) {
+    formData.value.config.workflow = createDefaultWorkflowDefinition();
+  }
+  return formData.value.config.workflow as WorkflowDefinition;
+};
 
 const starterSuggestionModeOptions = computed(() => [
   { value: 'curated', label: t('agentEditor.questionSuggestions.modeCurated') },
@@ -2872,6 +3008,7 @@ const agentMode = computed({
 });
 
 const isAgentMode = computed(() => agentMode.value === 'smart-reasoning');
+const isWorkflow = computed(() => agentType.value === 'workflow');
 
 const effectiveDefaultMaxCompletionTokens = computed(() =>
   defaultMaxCompletionTokensFor(agentMode.value, formData.value.config.sandbox_config_id),
@@ -3137,7 +3274,7 @@ const agentTypePresetDescription = (p: AgentTypePreset): string => {
 
 // t-select 的 options 数据：label 给 TDesign 自己（用于选中态显示），desc 走自定义 option slot
 const agentTypeSelectOptions = computed(() => {
-  return agentTypePresets.value.map(p => ({
+  return agentTypePresets.value.filter(p => p.id !== 'workflow').map(p => ({
     value: p.id,
     label: agentTypePresetLabel(p),
     desc: agentTypePresetDescription(p),
@@ -3323,6 +3460,7 @@ const applyAgentTypePreset = (preset: AgentTypePreset | null) => {
 
 // 用户手动切换类型 → 应用预设
 const onAgentTypeChange = (val: AgentType) => {
+  if (props.fixedAgentType && val !== props.fixedAgentType) return;
   // 切换前捕获"名称/描述是否可安全覆盖"
   // 已编辑过的用户输入（不等于任何预设默认值）绝不覆盖
   const canOverrideName = isNameSystemGenerated(formData.value.name);
@@ -3330,6 +3468,28 @@ const onAgentTypeChange = (val: AgentType) => {
 
   agentType.value = val;
   const preset = agentTypePresets.value.find(p => p.id === val) || null;
+  if (val === 'workflow') {
+    formData.value.config.agent_mode = 'smart-reasoning';
+    formData.value.config.system_prompt = '';
+    formData.value.config.context_template = '';
+    formData.value.config.allowed_tools = [];
+    formData.value.config.web_search_enabled = false;
+    formData.value.config.mcp_selection_mode = 'none';
+    formData.value.config.mcp_services = [];
+    formData.value.config.skills_selection_mode = 'none';
+    formData.value.config.selected_skills = [];
+    formData.value.config.kb_selection_mode = 'none';
+    formData.value.config.knowledge_bases = [];
+    kbSelectionMode.value = 'none';
+    mcpSelectionMode.value = 'none';
+    skillsSelectionMode.value = 'none';
+    ensureWorkflowDefinition();
+    if (canOverrideName) formData.value.name = '我的工作流';
+    if (canOverrideDesc) formData.value.description = '通过画布编排节点、分支和资源调用。';
+    currentSection.value = 'workflow';
+    void refreshWorkflowCatalog(editorAgent.value?.id);
+    return;
+  }
   if (val !== 'custom') {
     applyAgentTypePreset(preset);
   }
@@ -3396,6 +3556,9 @@ watch(() => props.visible, async (val) => {
     editorInitializing.value = true;
     try {
     savedAgent.value = null;
+    workflowCatalogError.value = '';
+    workflowValidationMessage.value = '';
+    workflowCatalog.value = { builtin_tools: [], mcp_services: [], skills: [] };
     currentSection.value = resolveEditorSection(props.initialSection);
     // 先加载依赖数据（包括默认配置）
     await loadDependencies();
@@ -3458,6 +3621,9 @@ watch(() => props.visible, async (val) => {
       isInitializing.value = true;
       agentData.config = hydrateAgentPromptRefs(agentData.config, promptTemplates.value);
       formData.value = agentData;
+      if (agentData.config.agent_type === 'workflow' && !agentData.config.workflow) {
+        agentData.config.workflow = createDefaultWorkflowDefinition();
+      }
       if (agentData.config.max_iterations > 1) {
         lastFiniteMaxIterations.value = agentData.config.max_iterations;
       }
@@ -3517,6 +3683,10 @@ watch(() => props.visible, async (val) => {
       mcpSelectionMode.value = 'none';
       skillsSelectionMode.value = 'none';
 
+      if (props.fixedAgentType === 'workflow') {
+        onAgentTypeChange('workflow');
+      }
+
       // 新建智能推理 agent 时，立即应用默认的 agent_type 预设
       // （补齐 system_prompt / allowed_tools / kb_selection_mode 等），
       // 否则用户在 modal 打开瞬间看到的"默认表单"和类型下拉显示的类型不一致。
@@ -3540,6 +3710,11 @@ watch(() => props.visible, async (val) => {
 
     await syncInstalledSkills()
     if (generation !== editorInitializationGeneration || !props.visible) return;
+    if (formData.value.config.agent_type === 'workflow') {
+      await refreshWorkflowCatalog(props.mode === 'edit' ? props.agent?.id : undefined);
+      if (generation !== editorInitializationGeneration || !props.visible) return;
+      currentSection.value = resolveEditorSection(props.initialSection || 'workflow');
+    }
 
     if (props.initialHighlightField) {
       await applyInitialFieldHighlight(props.initialHighlightField);
@@ -3666,7 +3841,10 @@ watch(mcpSelectionMode, (mode) => {
 
 watch(() => formData.value.config.sandbox_config_id, async () => {
   if (!props.visible) return
-  await syncInstalledSkills()
+  await syncInstalledSkills(true)
+  if (isWorkflow.value) {
+    await refreshWorkflowCatalog(editorAgent.value?.id)
+  }
 })
 
 let catalogPollTimer: number | null = null
@@ -3714,6 +3892,10 @@ watch(skillsSelectionMode, (mode) => {
 
 // 监听模式变化，自动调整配置
 watch(agentMode, (val, _oldVal) => {
+  if (formData.value.config.agent_type === 'workflow') {
+    if (val !== 'smart-reasoning') formData.value.config.agent_mode = 'smart-reasoning';
+    return;
+  }
   if (val === 'smart-reasoning') {
     // 切换到 Agent 模式，根据知识库配置启用工具。
     // 注意：默认不注入 thinking / todo_write —— 它们用于显式反思或多步计划，
@@ -3811,6 +3993,7 @@ watch(() => uiStore.showSettingsModal, async (visible, prevVisible) => {
       await Promise.all([
         chatResources.ensureModels(true),
         editorResources.ensureStorageEngine(true),
+        editorResources.ensureMcpServices(true),
         chatResources.ensureSandboxConfigs(true),
       ]);
       if (chatResources.allModels.length > 0) {
@@ -3820,6 +4003,9 @@ watch(() => uiStore.showSettingsModal, async (visible, prevVisible) => {
         storageEngineStatus.value = editorResources.storageStatus;
       }
       await syncInstalledSkills(true);
+      if (isWorkflow.value) {
+        await refreshWorkflowCatalog(editorAgent.value?.id);
+      }
     } catch (e) {
       console.warn('Failed to refresh data after settings closed', e);
     }
@@ -3922,6 +4108,103 @@ const loadDependencies = async () => {
     console.error('Failed to load dependencies', e);
   }
 };
+
+const workflowBuiltinToolNames = new Set([
+  'knowledge_search',
+  'grep_chunks',
+  'list_knowledge_chunks',
+  'query_knowledge_graph',
+  'get_document_info',
+  'wiki_search',
+  'wiki_read_page',
+  'wiki_read_source_doc',
+  'wiki_read_issue',
+  'web_search',
+  'web_fetch',
+  'search_conversations',
+  'search_memory',
+  'data_schema',
+]);
+
+async function buildLocalWorkflowCatalog(): Promise<WorkflowCatalog> {
+  const builtin_tools = allTools.value
+    .filter((tool) => workflowBuiltinToolNames.has(tool.value))
+    .map((tool) => ({
+      name: tool.value,
+      display_name: tool.label,
+      description: tool.description,
+      parameters: {},
+    }));
+
+  const mcp_services = await Promise.all(
+    editorResources.mcpServices
+      .filter((service) => service.enabled)
+      .map(async (service) => {
+        const tools = await getMCPServiceTools(service.id).catch(() => []);
+        return {
+          id: service.id,
+          name: service.name,
+          description: service.description,
+          tools: tools.map((tool) => ({
+            name: tool.name,
+            display_name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema || {},
+            require_approval: tool.require_approval,
+          })),
+        };
+      }),
+  );
+
+  const skillCatalogByName = new Map(editorResources.skillCatalog.map((skill) => [skill.name, skill]));
+
+  return {
+    builtin_tools,
+    mcp_services,
+    skills: editorResources.skills.map((skill) => {
+      const metadata = skillCatalogByName.get(skill.name);
+      return {
+        name: skill.name,
+        version: metadata?.version,
+        description: skill.description || metadata?.description,
+      };
+    }),
+  };
+}
+
+async function refreshWorkflowCatalog(agentId?: string) {
+  workflowCatalogError.value = '';
+  try {
+    const localCatalog = await buildLocalWorkflowCatalog();
+    if (agentId) {
+      const response = await getWorkflowCatalog(agentId);
+      if (response?.data) {
+        workflowCatalog.value = {
+          ...response.data,
+          // Skill 必须跟随当前草稿选择的沙箱，不能沿用服务端已保存配置的目录。
+          skills: localCatalog.skills,
+        };
+        return;
+      }
+    }
+    workflowCatalog.value = localCatalog;
+  } catch (error: any) {
+    workflowCatalogError.value = error?.message || '加载工作流资源失败，请稍后重试。';
+    workflowCatalog.value = await buildLocalWorkflowCatalog();
+  }
+}
+
+function openWorkflowSandboxSelection() {
+  currentSection.value = 'skills';
+}
+
+function openWorkflowKnowledgeBaseSelection() {
+  currentSection.value = 'knowledge';
+}
+
+function openWorkflowMcpSettings() {
+  uiStore.openSettings('mcp');
+}
 
 // 跳转到模型管理页面添加模型
 const handleAddModel = (subSection: string) => {
@@ -4738,27 +5021,76 @@ const hasPlaceholder = (text: string | undefined, placeholder: string): boolean 
   return text.includes(`{{${placeholder}}}`);
 };
 
-const handleSave = async () => {
+async function handleWorkflowRun() {
+  if (workflowRunLoading.value || saving.value || props.readOnly || !isWorkflow.value) return;
+  workflowRunLoading.value = true;
+  try {
+    if (!await handleSave()) return;
+    const agentId = formData.value.id || editorAgent.value?.id;
+    if (!agentId) {
+      throw new Error(t('agent.messages.saveFailed'));
+    }
+    const response: any = await createSessions({});
+    if (!response?.data?.id) {
+      throw new Error(t('createChat.messages.createFailed'));
+    }
+    const sessionId = response.data.id as string;
+    const now = new Date().toISOString();
+    menuStore.updataMenuChildren({
+      title: t('createChat.newSessionTitle'),
+      path: `chat/${sessionId}`,
+      id: sessionId,
+      isMore: false,
+      isNoTitle: true,
+      created_at: now,
+      updated_at: now,
+    });
+    menuStore.changeIsFirstSession(false);
+    handleClose();
+    await router.push({ path: `/platform/chat/${sessionId}`, query: { agent_id: agentId } });
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('createChat.messages.createError'));
+  } finally {
+    workflowRunLoading.value = false;
+  }
+}
+
+const handleSave = async (): Promise<boolean> => {
+  if (isWorkflow.value) {
+    ensureWorkflowDefinition();
+    if (!workflowEditorRef.value?.validate()) {
+      currentSection.value = 'workflow';
+      return false;
+    }
+    // 工作流节点自己声明资源，顶层字段由后端保存校验时重新汇总。
+    formData.value.config.agent_mode = 'smart-reasoning';
+    formData.value.config.system_prompt = '';
+    formData.value.config.context_template = '';
+    formData.value.config.allowed_tools = [];
+    formData.value.config.mcp_services = [];
+    formData.value.config.selected_skills = [];
+  }
+
   // 验证必填项（内置智能体不验证名称和系统提示词）
   if (!isBuiltinAgent.value) {
     if (!formData.value.name || !formData.value.name.trim()) {
       MessagePlugin.error(t('agent.editor.nameRequired'));
       currentSection.value = 'basic';
-      return;
+      return false;
     }
 
-    // 自定义智能体必须填写系统提示词
-    if (!formData.value.config.system_prompt || !formData.value.config.system_prompt.trim()) {
+    // 工作流的节点配置就是运行定义，不需要额外的系统提示词。
+    if (!isWorkflow.value && (!formData.value.config.system_prompt || !formData.value.config.system_prompt.trim())) {
       MessagePlugin.error(t('agent.editor.systemPromptRequired'));
       currentSection.value = 'prompts';
-      return;
+      return false;
     }
 
     // 自定义智能体普通模式必须填写上下文模板
-    if (!isAgentMode.value && (!formData.value.config.context_template || !formData.value.config.context_template.trim())) {
+    if (!isWorkflow.value && !isAgentMode.value && (!formData.value.config.context_template || !formData.value.config.context_template.trim())) {
       MessagePlugin.error(t('agent.editor.contextTemplateRequired'));
       currentSection.value = 'prompts';
-      return;
+      return false;
     }
   }
 
@@ -4767,40 +5099,40 @@ const handleSave = async () => {
 
 
   // 校验占位符（普通模式 + 开启多轮对话改写）
-  if (!isAgentMode.value && formData.value.config.multi_turn_enabled && formData.value.config.enable_rewrite) {
+  if (!isWorkflow.value && !isAgentMode.value && formData.value.config.multi_turn_enabled && formData.value.config.enable_rewrite) {
     const rewritePrompt = formData.value.config.rewrite_prompt_user || '';
     // 只有用户自定义了改写提示词时才校验
     if (rewritePrompt.trim()) {
       if (!hasPlaceholder(rewritePrompt, 'query')) {
         MessagePlugin.error(t('agent.editor.queryMissingInRewrite'));
         currentSection.value = 'prompts';
-        return;
+        return false;
       }
     }
   }
 
   // 校验占位符（兜底策略为模型生成时）
-  if (!isAgentMode.value && formData.value.config.fallback_strategy === 'model') {
+  if (!isWorkflow.value && !isAgentMode.value && formData.value.config.fallback_strategy === 'model') {
     const fallbackPrompt = formData.value.config.fallback_prompt || '';
     // 只有用户自定义了兜底提示词时才校验
     if (fallbackPrompt.trim() && !hasPlaceholder(fallbackPrompt, 'query')) {
       MessagePlugin.error(t('agent.editor.queryMissingInFallback'));
       currentSection.value = 'prompts';
-      return;
+      return false;
     }
   }
 
   if (!formData.value.config.model_id) {
     MessagePlugin.error(t('agent.editor.modelRequired'));
     currentSection.value = 'model';
-    return;
+    return false;
   }
 
   // 校验 VLM 模型（当图片上传启用时必填）
   if (formData.value.config.image_upload_enabled && !formData.value.config.vlm_model_id) {
     MessagePlugin.error(t('agentEditor.imageUpload.vlmModelRequired'));
     currentSection.value = 'multimodal';
-    return;
+    return false;
   }
 
   // ReRank 模型按运行范围按需使用：知识库范围为 none，或未启用
@@ -4815,7 +5147,7 @@ const handleSave = async () => {
     delete formData.value.config.intent_prompts;
   }
 
-  pruneSelectedSkills()
+  if (!isWorkflow.value) pruneSelectedSkills()
 
   const payload = { ...formData.value, config: serializeAgentPrompts(formData.value.config, promptTemplates.value) };
   saving.value = true;
@@ -4828,10 +5160,10 @@ const handleSave = async () => {
       }
       savedAgent.value = created;
       formData.value.id = created.id;
-      markContextualGuideDone('agentCreate')
+      if (!isWorkflow.value) markContextualGuideDone('agentCreate')
       currentSection.value = 'basic';
       void loadAgentIntegrationCounts(created.id);
-      MessagePlugin.success(t('agent.messages.created'));
+      MessagePlugin.success(isWorkflow.value ? t('workflow.messages.created') : t('agent.messages.created'));
       emit('success', created);
     } else {
       await updateAgent(formData.value.id, payload);
@@ -4839,8 +5171,10 @@ const handleSave = async () => {
       emit('success');
       handleClose();
     }
+    return true;
   } catch (e: any) {
     MessagePlugin.error(e?.message || t('agent.messages.saveFailed'));
+    return false;
   } finally {
     saving.value = false;
   }
@@ -4875,6 +5209,13 @@ const handleSave = async () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.settings-modal--workflow {
+  width: 96vw;
+  max-width: 1500px;
+  height: 92vh;
+  max-height: 900px;
 }
 
 .editor-initializing {
@@ -5138,11 +5479,70 @@ const handleSave = async () => {
     overflow: hidden;
     padding-bottom: 28px;
   }
+
+  &--workflow {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 24px 28px 28px;
+  }
 }
 
 .section {
   width: 100%;
   animation: sectionFadeIn 0.25s ease;
+}
+
+.section--workflow {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.workflow-catalog-error {
+  margin: 8px 0 0;
+  color: var(--td-warning-color);
+  font-size: 12px;
+}
+
+/* 首次进入工作流时的一次性说明：讲清"这是什么、和普通智能体差在哪"。 */
+.workflow-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--td-brand-color) 24%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--td-brand-color) 6%, transparent);
+  color: var(--td-text-color-primary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.workflow-intro :deep(.t-icon) {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--td-brand-color);
+}
+
+.workflow-intro span {
+  flex: 1;
+}
+
+.workflow-intro-dismiss {
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+  transition: color 160ms ease-out;
+}
+
+.workflow-intro-dismiss:hover {
+  color: var(--td-text-color-primary);
 }
 
 @keyframes sectionFadeIn {

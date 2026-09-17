@@ -291,7 +291,7 @@ const legacyFinalAnswerToolName = "final_answer"
 func filterNonTerminalToolCalls(calls []types.ToolCall) []types.ToolCall {
 	out := make([]types.ToolCall, 0, len(calls))
 	for _, tc := range calls {
-		if tc.Name == legacyFinalAnswerToolName || types.IsPipelineToolCallID(tc.ID) {
+		if tc.Name == legacyFinalAnswerToolName || types.IsPipelineToolCallID(tc.ID) || types.IsWorkflowToolCall(tc.Name) {
 			continue
 		}
 		out = append(out, tc)

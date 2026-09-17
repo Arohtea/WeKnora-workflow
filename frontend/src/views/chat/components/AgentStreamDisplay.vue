@@ -2550,6 +2550,20 @@ agentRenderer.image = function agentImageRenderer(token) {
   return defaultImageRenderer.call(this, token);
 };
 
+const defaultLinkRenderer = new marked.Renderer().link;
+agentRenderer.link = function agentLinkRenderer(token) {
+  const artifactHtml = renderArtifactReference({
+    href: token.href || '',
+    alt: token.text || '',
+    artifacts: artifactList.value,
+    labels: artifactRefLabels.value,
+    context: artifactRefContext.value,
+    streaming: !isSegmentDone.value,
+  });
+  if (artifactHtml !== null) return artifactHtml;
+  return defaultLinkRenderer.call(this, token);
+};
+
 const hasCachedMermaidSvg = (cached: CachedMermaidSvgHtml): boolean => {
   if (!cached) return false;
   if (typeof cached === 'string') return cached.length > 0;

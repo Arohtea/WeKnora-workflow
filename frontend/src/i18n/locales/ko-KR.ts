@@ -1696,6 +1696,7 @@ export default {
       newChat: '새 대화',
       knowledgeBases: '지식베이스 열기',
       agents: '에이전트 열기',
+      workflows: '워크플로 열기',
       organizations: '공유 공간 열기',
       settings: '설정 열기',
       productTour: '사용 가이드'
@@ -6968,6 +6969,26 @@ export default {
         }
       }
     },
+    workflowCreate: {
+      steps: {
+        templates: {
+          title: '템플릿에서 시작',
+          desc: '템플릿은 이미 연결이 완성된 워크플로입니다. 가장 비슷한 것을 고르고 표시된 부분만 내 지식베이스나 도구로 바꾸면 됩니다.'
+        },
+        canvas: {
+          title: '이것이 흐름입니다',
+          desc: '네모 하나가 단계 하나이고, 화살표는 실행 순서입니다. 네모는 끌어서 옮길 수 있지만 그림 위치만 바뀌고 실행 순서는 그대로입니다.'
+        },
+        palette: {
+          title: '단계 추가',
+          desc: '왼쪽 단계를 클릭하면 캔버스에 추가됩니다. 그다음 이전 네모에서 선을 끌어 연결하세요.'
+        },
+        inspector: {
+          title: '여기에 입력합니다',
+          desc: '선택한 노드에 필요한 항목이 오른쪽에 나타납니다. 빨간 별표는 필수 항목이라 입력하지 않으면 저장할 수 없습니다.'
+        }
+      }
+    },
     agentList: {
       steps: {
         create: {
@@ -7147,6 +7168,7 @@ export default {
     sessionInProgress: '대화 진행 중',
     knowledgeBase: '지식베이스',
     agents: '에이전트',
+    workflows: '워크플로',
     organizations: '공유 공간',
     newChat: '새 대화',
     settings: '시스템 설정',
@@ -7170,5 +7192,34 @@ export default {
     myChats: '내 대화',
     apiChats: 'API 세션',
     noSessions: '대화가 없습니다'
+  },
+  workflow: {
+    title: '워크플로',
+    subtitle: '「자료 검색, 판단, 답변」 등의 고정 단계를 규격화하여 안정적인 실행을 보장합니다',
+    createWorkflow: '워크플로 생성',
+    messages: {
+      created: '워크플로가 생성되었습니다',
+      deleted: '워크플로가 삭제되었습니다',
+      deleteFailed: '워크플로 삭제 실패',
+    },
+    delete: {
+      confirmTitle: '워크플로 삭제',
+      confirmMessage: '워크플로 「{name}」을(를) 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.',
+      confirmButton: '삭제 확인',
+    },
+    detail: {
+      title: '워크플로 상세 정보',
+    },
+    empty: {
+      title: '워크플로가 없습니다',
+      description: '단계가 고정된 정형화된 작업에 적합합니다. 템플릿을 선택하여 빠르게 시작해 보세요.',
+      sharedTitle: '공유된 워크플로가 없습니다',
+      sharedDescription: '다른 공간에서 공유된 워크플로가 여기에 표시됩니다',
+      favoritesTitle: '즐겨찾기한 워크플로가 없습니다',
+      favoritesDescription: '즐겨찾기에 추가한 워크플로를 빠르게 확인할 수 있습니다',
+      recentsTitle: '최근 방문한 워크플로가 없습니다',
+      recentsDescription: '최근 사용한 워크플로가 여기에 표시됩니다',
+    },
   }
 }
+

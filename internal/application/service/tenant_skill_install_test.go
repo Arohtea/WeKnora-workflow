@@ -3103,10 +3103,13 @@ func (s *installCustomAgentService) ListAgents(context.Context) ([]*types.Custom
 }
 
 func (s *installCustomAgentService) UpdateAgent(
-	_ context.Context, agent *types.CustomAgent, avatar *string,
+	_ context.Context, agent *types.CustomAgent, avatar *string, config *types.CustomAgentConfig,
 ) (*types.CustomAgent, error) {
 	if avatar != nil {
 		agent.Avatar = *avatar
+	}
+	if config != nil {
+		agent.Config = *config
 	}
 	return agent, nil
 }

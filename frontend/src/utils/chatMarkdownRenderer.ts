@@ -26,9 +26,16 @@ export type ImageRendererArgs = {
   text: string
 }
 
+export type LinkRendererArgs = {
+  href: string
+  title: string | null
+  text: string
+}
+
 export type ChatMarkdownRendererOptions = {
   codeRenderer?: Renderer['code']
   imageRenderer?: (args: ImageRendererArgs) => string
+  linkRenderer?: (args: LinkRendererArgs) => string | null
   invalidImageHtml?: (href: string) => string
   isValidImageUrl?: (href: string) => boolean
 }
@@ -402,6 +409,20 @@ export function createChatMarkdownRenderer(options: ChatMarkdownRendererOptions 
         title: title || null,
         text: text || '',
       }) ?? ''
+    }
+  }
+
+  const defaultLinkRenderer = new marked.Renderer().link
+  if (options.linkRenderer) {
+    renderer.link = function (token: Tokens.Link) {
+      const linkHref = token.href || ''
+      const custom = options.linkRenderer?.({
+        href: linkHref,
+        title: token.title || null,
+        text: token.text || '',
+      })
+      if (custom !== undefined && custom !== null) return custom
+      return defaultLinkRenderer.call(this, token)
     }
   }
 

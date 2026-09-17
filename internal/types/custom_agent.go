@@ -57,6 +57,9 @@ const (
 	// uploaded into the KB. Retrieval semantics (vector/wiki/…) are largely
 	// irrelevant — this type is about data_schema + data_analysis tools.
 	AgentTypeDataAnalysis = "data-analysis"
+	// AgentTypeWorkflow runs a user-authored deterministic DAG through the
+	// existing smart-reasoning conversation entry point.
+	AgentTypeWorkflow = "workflow"
 	// AgentTypeCustom is the "no preset" option; user-configured end to end.
 	AgentTypeCustom = "custom"
 )
@@ -125,10 +128,14 @@ type CustomAgentConfig struct {
 	AgentMode string `yaml:"agent_mode" json:"agent_mode"`
 	// AgentType is a preset category under smart-reasoning mode that pre-fills
 	// system prompt, allowed tools and recommended KB compatibility.
-	// Valid values: "rag-qa", "wiki-qa", "hybrid-rag-wiki", "custom".
+	// Valid values: "rag-qa", "wiki-qa", "hybrid-rag-wiki", "workflow", "custom".
 	// Empty / unknown values are treated as "custom" (no preset applied).
 	// Ignored for quick-answer mode.
 	AgentType string `yaml:"agent_type" json:"agent_type,omitempty"`
+	// Workflow stores the versioned DAG when AgentType is workflow. It remains
+	// in the existing JSON config column so workflow agents share the same
+	// permissions, publishing and conversation lifecycle as other agents.
+	Workflow *WorkflowDefinition `yaml:"workflow,omitempty" json:"workflow,omitempty"`
 	// System prompt for the agent (unified prompt, uses web_search_status placeholder for dynamic behavior)
 	SystemPrompt string `yaml:"system_prompt" json:"system_prompt"`
 	// SystemPromptID references a template ID in prompt_templates/ YAML files.
@@ -520,6 +527,15 @@ func (a *CustomAgent) EnsureDefaults() {
 		}
 	} else {
 		a.Config.QuestionSuggestions.EnsureDefaults()
+	}
+	if a.Config.AgentType == AgentTypeWorkflow {
+		a.Config.AgentMode = AgentModeSmartReasoning
+		if a.Config.Workflow == nil {
+			a.Config.Workflow = DefaultWorkflowDefinition()
+		}
+		if a.Config.Workflow.Version == 0 {
+			a.Config.Workflow.Version = WorkflowVersion
+		}
 	}
 	if a.Config.Temperature < 0 {
 		a.Config.Temperature = 0.7

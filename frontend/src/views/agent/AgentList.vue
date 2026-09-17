@@ -1,14 +1,19 @@
 <template>
   <div class="agent-list-container">
     <ListSpaceSidebar v-if="!authStore.isLiteMode" v-model="spaceSelection" :count-all="allAgentsCount"
-      :count-mine="agents.length" :count-by-org="effectiveSharedCountByOrg" :count-favorites="agentFavoritesCount"
-      :count-recents="agentRecentsCount" />
+      :count-mine="agents.length" :count-by-org="effectiveSharedCountByOrg" :count-favorites="resourceFavoritesCount"
+      :count-recents="resourceRecentsCount" />
     <div class="agent-list-content">
       <div class="header" style="--wails-draggable: drag">
         <div class="header-title" style="--wails-draggable: drag">
           <div class="title-row" style="--wails-draggable: drag">
-            <h2 style="--wails-draggable: drag">{{ $t('agent.title') }}</h2>
-            <t-tooltip v-if="authStore.hasRole('contributor')" :content="$t('agent.createAgent')" placement="bottom">
+            <h2 style="--wails-draggable: drag">{{ resourceCopy.title }}</h2>
+            <t-button v-if="authStore.hasRole('contributor') && isWorkflowList" variant="outline" theme="primary"
+              size="small" class="workflow-create-action" style="--wails-draggable: no-drag" @click="handleCreateAgent">
+              <template #icon><t-icon name="add" /></template>
+              创建工作流
+            </t-button>
+            <t-tooltip v-else-if="authStore.hasRole('contributor')" :content="resourceCopy.create" placement="bottom">
               <t-button variant="text" theme="default" size="small" class="header-action-btn"
                 data-guide="agent-list-create" style="--wails-draggable: no-drag" @click="handleCreateAgent">
                 <template #icon>
@@ -33,7 +38,7 @@
               </t-button>
             </t-tooltip>
           </div>
-          <p class="header-subtitle" style="--wails-draggable: drag">{{ $t('agent.subtitle') }}</p>
+          <p class="header-subtitle" style="--wails-draggable: drag">{{ resourceCopy.subtitle }}</p>
         </div>
       </div>
       <div class="agent-list-main">
@@ -639,8 +644,8 @@
         <!-- 空状态：全部（保留创建 CTA） -->
         <div v-if="spaceSelection === 'all' && filteredAgents.length === 0 && !loading" class="empty-state">
           <img class="empty-img" src="@/assets/img/upload.svg" alt="">
-          <span class="empty-txt">{{ $t('agent.empty.title') }}</span>
-          <span class="empty-desc">{{ $t('agent.empty.description') }}</span>
+          <span class="empty-txt">{{ resourceCopy.emptyTitle }}</span>
+          <span class="empty-desc">{{ resourceCopy.emptyDescription }}</span>
           <t-button v-if="authStore.hasRole('contributor')" class="agent-create-btn empty-state-btn"
             data-guide="agent-list-create" @click="handleCreateAgent">
             <template #icon>
@@ -662,26 +667,26 @@
                 </svg>
               </span>
             </template>
-            <span>{{ $t('agent.createAgent') }}</span>
+            <span>{{ resourceCopy.create }}</span>
           </t-button>
         </div>
 
         <!-- 空状态：收藏 / 最近 — 不放创建按钮，参见 KnowledgeBaseList 的同处理由 -->
         <div v-if="spaceSelection === 'favorites' && filteredAgents.length === 0 && !loading" class="empty-state">
           <t-icon name="star" size="48px" class="empty-icon" />
-          <span class="empty-txt">{{ $t('agent.empty.favoritesTitle') }}</span>
-          <span class="empty-desc">{{ $t('agent.empty.favoritesDescription') }}</span>
+          <span class="empty-txt">{{ resourceCopy.favoritesTitle }}</span>
+          <span class="empty-desc">{{ resourceCopy.favoritesDescription }}</span>
         </div>
         <div v-if="spaceSelection === 'recents' && filteredAgents.length === 0 && !loading" class="empty-state">
           <t-icon name="history" size="48px" class="empty-icon" />
-          <span class="empty-txt">{{ $t('agent.empty.recentsTitle') }}</span>
-          <span class="empty-desc">{{ $t('agent.empty.recentsDescription') }}</span>
+          <span class="empty-txt">{{ resourceCopy.recentsTitle }}</span>
+          <span class="empty-desc">{{ resourceCopy.recentsDescription }}</span>
         </div>
         <!-- 空状态：我的 -->
         <div v-if="spaceSelection === 'mine' && agents.length === 0 && !loading" class="empty-state">
           <img class="empty-img" src="@/assets/img/upload.svg" alt="">
-          <span class="empty-txt">{{ $t('agent.empty.title') }}</span>
-          <span class="empty-desc">{{ $t('agent.empty.description') }}</span>
+          <span class="empty-txt">{{ resourceCopy.emptyTitle }}</span>
+          <span class="empty-desc">{{ resourceCopy.emptyDescription }}</span>
           <t-button v-if="authStore.hasRole('contributor')" class="agent-create-btn empty-state-btn"
             @click="handleCreateAgent">
             <template #icon>
@@ -703,14 +708,14 @@
                 </svg>
               </span>
             </template>
-            <span>{{ $t('agent.createAgent') }}</span>
+            <span>{{ resourceCopy.create }}</span>
           </t-button>
         </div>
         <!-- 空状态：空间下 -->
         <div v-if="spaceSelectionOrgId && !spaceAgentsLoading && spaceAgentsList.length === 0" class="empty-state">
           <img class="empty-img" src="@/assets/img/upload.svg" alt="">
-          <span class="empty-txt">{{ $t('agent.empty.sharedTitle') }}</span>
-          <span class="empty-desc">{{ $t('agent.empty.sharedDescription') }}</span>
+          <span class="empty-txt">{{ resourceCopy.sharedTitle }}</span>
+          <span class="empty-desc">{{ resourceCopy.sharedDescription }}</span>
         </div>
       </div>
     </div>
@@ -721,14 +726,14 @@
       <div class="circle-wrap">
         <div class="dialog-header">
           <img class="circle-img" src="@/assets/img/circle.png" alt="">
-          <span class="circle-title">{{ $t('agent.delete.confirmTitle') }}</span>
+          <span class="circle-title">{{ resourceCopy.deleteTitle }}</span>
         </div>
         <span class="del-circle-txt">
-          {{ $t('agent.delete.confirmMessage', { name: deletingAgent?.name ?? '' }) }}
+          {{ resourceCopy.deleteMessage(deletingAgent?.name ?? '') }}
         </span>
         <div class="circle-btn">
           <span class="circle-btn-txt" @click="deleteVisible = false">{{ $t('common.cancel') }}</span>
-          <span class="circle-btn-txt confirm" @click="confirmDelete">{{ $t('agent.delete.confirmButton') }}</span>
+          <span class="circle-btn-txt confirm" @click="confirmDelete">{{ resourceCopy.deleteButton }}</span>
         </div>
       </div>
     </t-dialog>
@@ -739,7 +744,7 @@
         @click.self="closeSharedAgentDetail">
         <div class="shared-detail-drawer">
           <div class="shared-detail-drawer-header">
-            <h3 class="shared-detail-drawer-title">{{ $t('agent.detail.title') }}</h3>
+            <h3 class="shared-detail-drawer-title">{{ resourceCopy.detailTitle }}</h3>
             <button type="button" class="shared-detail-drawer-close" @click="closeSharedAgentDetail"
               :aria-label="$t('general.close')">
               <t-icon name="close" />
@@ -803,11 +808,12 @@
     <AgentEditorModal :visible="editorVisible" :mode="editorMode" :agent="editingAgent"
       :initialSection="editorInitialSection"
       :initialHighlightField="editorInitialHighlightField"
+      :fixedAgentType="isWorkflowList ? 'workflow' : undefined"
       :readOnly="editorMode === 'edit' && editingAgent != null && !canManageAgent(editingAgent as AgentWithUI)"
       @update:visible="editorVisible = $event" @success="handleEditorSuccess" />
 
-    <TenantModelsGuide :when="showAgentTenantModelsGuide" variant="agent" />
-    <ContextualGuide tour="agentList" :when="showAgentListContextualGuide" />
+    <TenantModelsGuide v-if="!isWorkflowList" :when="showAgentTenantModelsGuide" variant="agent" />
+    <ContextualGuide v-if="!isWorkflowList" tour="agentList" :when="showAgentListContextualGuide" />
   </div>
 </template>
 
@@ -849,6 +855,53 @@ const orgStore = useOrganizationStore()
 const chatResources = useChatResourcesStore()
 const { loaded: modelsReadyLoaded, isReadyForAgent } = useTenantModelReadiness()
 
+const props = withDefaults(defineProps<{
+  resourceType?: 'agent' | 'workflow'
+}>(), {
+  resourceType: 'agent',
+})
+
+const isWorkflowList = computed(() => props.resourceType === 'workflow')
+const matchesResourceType = (agent?: CustomAgent | null) =>
+  !!agent && (agent.config?.agent_type === 'workflow') === isWorkflowList.value
+const resourceCopy = computed(() => isWorkflowList.value ? {
+  title: t('workflow.title'),
+  subtitle: t('workflow.subtitle'),
+  create: t('workflow.createWorkflow'),
+  emptyTitle: t('workflow.empty.title'),
+  emptyDescription: t('workflow.empty.description'),
+  sharedTitle: t('workflow.empty.sharedTitle'),
+  sharedDescription: t('workflow.empty.sharedDescription'),
+  favoritesTitle: t('workflow.empty.favoritesTitle'),
+  favoritesDescription: t('workflow.empty.favoritesDescription'),
+  recentsTitle: t('workflow.empty.recentsTitle'),
+  recentsDescription: t('workflow.empty.recentsDescription'),
+  detailTitle: t('workflow.detail.title'),
+  deleteTitle: t('workflow.delete.confirmTitle'),
+  deleteMessage: (name: string) => t('workflow.delete.confirmMessage', { name }),
+  deleteButton: t('workflow.delete.confirmButton'),
+  deleted: t('workflow.messages.deleted'),
+  deleteFailed: t('workflow.messages.deleteFailed'),
+} : {
+  title: t('agent.title'),
+  subtitle: t('agent.subtitle'),
+  create: t('agent.createAgent'),
+  emptyTitle: t('agent.empty.title'),
+  emptyDescription: t('agent.empty.description'),
+  sharedTitle: t('agent.empty.sharedTitle'),
+  sharedDescription: t('agent.empty.sharedDescription'),
+  favoritesTitle: t('agent.empty.favoritesTitle'),
+  favoritesDescription: t('agent.empty.favoritesDescription'),
+  recentsTitle: t('agent.empty.recentsTitle'),
+  recentsDescription: t('agent.empty.recentsDescription'),
+  detailTitle: t('agent.detail.title'),
+  deleteTitle: t('agent.delete.confirmTitle'),
+  deleteMessage: (name: string) => t('agent.delete.confirmMessage', { name }),
+  deleteButton: t('agent.delete.confirmButton'),
+  deleted: t('agent.messages.deleted'),
+  deleteFailed: t('agent.messages.deleteFailed'),
+})
+
 interface AgentWithUI extends CustomAgent {
   showMore?: boolean
   /** 当前空间在对话下拉中停用（仅影响本空间） */
@@ -874,14 +927,10 @@ const { scope: spaceSelection, creator: creatorFilter } = useListUrlState({
 
 // Per-user favorites + recents (localStorage-backed). See useResourcePins.
 const pins = useResourcePins()
-const agentFavoritesCount = computed(
-  () => pins.favorites.value.filter((e) => e.type === 'agent').length
-)
-const agentRecentsCount = computed(
-  () => pins.recents.value.filter((e) => e.type === 'agent').length
-)
 const agents = ref<AgentWithUI[]>([])
-const sharedAgents = computed<SharedAgentInfo[]>(() => orgStore.sharedAgents || [])
+const sharedAgents = computed<SharedAgentInfo[]>(() =>
+  (orgStore.sharedAgents || []).filter((shared) => matchesResourceType(shared.agent as CustomAgent)),
+)
 const allAgentsCount = computed(() => agents.value.length + sharedAgents.value.length)
 
 // Same gotcha as KnowledgeBaseList: keep the reserved-scope set in sync
@@ -936,6 +985,12 @@ const agentResourceIndex = computed(() => {
   }
   return map
 })
+const resourceFavoritesCount = computed(() =>
+  pins.favorites.value.filter((entry) => entry.type === 'agent' && agentResourceIndex.value.has(entry.id)).length,
+)
+const resourceRecentsCount = computed(() =>
+  pins.recents.value.filter((entry) => entry.type === 'agent' && agentResourceIndex.value.has(entry.id)).length,
+)
 
 const favoritesAgentList = computed<DisplayAgent[]>(() => {
   return pins.favorites.value
@@ -1103,11 +1158,13 @@ const showAgentListContextualGuide = computed(
 
 const applyAgentListData = (res: { data: CustomAgent[]; disabled_own_agent_ids: string[] }) => {
   const disabledOwnIds = res.disabled_own_agent_ids || []
-  agents.value = (res.data || []).map((agent: CustomAgent) => ({
-    ...agent,
-    showMore: false,
-    disabled_by_me: disabledOwnIds.includes(agent.id)
-  }))
+  agents.value = (res.data || [])
+    .filter(matchesResourceType)
+    .map((agent: CustomAgent) => ({
+      ...agent,
+      showMore: false,
+      disabled_by_me: disabledOwnIds.includes(agent.id)
+    }))
   void checkAndOpenEditModal()
 }
 
@@ -1120,8 +1177,16 @@ const fetchList = (force = false) => {
   ]).finally(() => { loading.value = false }).then(() => {
     void checkAndOpenEditModal()
     // 各空间智能体数量已由 GET /organizations 的 resource_counts 带回，存于 orgStore.resourceCounts
-    const counts = orgStore.resourceCounts?.agents?.by_organization
-    if (counts) spaceAgentCountByOrg.value = { ...counts }
+    const totalCounts = orgStore.resourceCounts?.agents?.by_organization || {}
+    const workflowCounts = orgStore.resourceCounts?.workflows?.by_organization || {}
+    const nextCounts: Record<string, number> = {}
+    for (const org of orgStore.organizations || []) {
+      const workflows = workflowCounts[org.id] || 0
+      nextCounts[org.id] = isWorkflowList.value
+        ? workflows
+        : Math.max(0, (totalCounts[org.id] || 0) - workflows)
+    }
+    spaceAgentCountByOrg.value = nextCounts
   })
 }
 
@@ -1160,7 +1225,7 @@ const checkAndOpenEditModal = async () => {
     // refresh callback can resolve and open the target instead of losing it.
     if (!agent) return
 
-    const requestedSection = section || 'basic'
+    const requestedSection = section || (isWorkflowList.value ? 'workflow' : 'basic')
     const requestedHighlight = (route.query.highlight as string) || ''
     if (
       editorVisible.value
@@ -1205,6 +1270,14 @@ watch(
   },
 )
 
+watch(isWorkflowList, () => {
+  editorVisible.value = false
+  editingAgent.value = null
+  agents.value = []
+  spaceAgentsList.value = []
+  void fetchList()
+})
+
 // 监听菜单创建智能体事件
 const handleOpenAgentEditor = (event: CustomEvent) => {
   if (event.detail?.mode === 'create') {
@@ -1214,15 +1287,16 @@ const handleOpenAgentEditor = (event: CustomEvent) => {
 
 // 选中空间时请求该空间内全部智能体（含我共享的）
 watch(spaceSelection, (val) => {
-  if (val === 'all' || val === 'mine' || !val) {
+  if (!val || RESERVED_SCOPES.has(val)) {
     spaceAgentsList.value = []
     return
   }
   spaceAgentsLoading.value = true
   listOrganizationSharedAgents(val).then((res) => {
     if (res.success && res.data) {
-      spaceAgentsList.value = res.data
-      spaceAgentCountByOrg.value = { ...spaceAgentCountByOrg.value, [val]: res.data.length }
+      const filtered = res.data.filter((item) => matchesResourceType(item.agent as CustomAgent))
+      spaceAgentsList.value = filtered
+      spaceAgentCountByOrg.value = { ...spaceAgentCountByOrg.value, [val]: filtered.length }
     } else {
       spaceAgentsList.value = []
     }
@@ -1335,7 +1409,7 @@ const handleEdit = (agent: AgentWithUI) => {
   openMoreAgentId.value = null
   editingAgent.value = agent
   editorMode.value = 'edit'
-  editorInitialSection.value = 'basic'
+  editorInitialSection.value = isWorkflowList.value ? 'workflow' : 'basic'
   editorInitialHighlightField.value = ''
   editorVisible.value = true
 }
@@ -1559,15 +1633,15 @@ const confirmDelete = () => {
 
   deleteAgent(deletingAgent.value.id).then((res: any) => {
     if (res.success) {
-      MessagePlugin.success(t('agent.messages.deleted'))
+      MessagePlugin.success(resourceCopy.value.deleted)
       deleteVisible.value = false
       deletingAgent.value = null
       fetchList(true)
     } else {
-      MessagePlugin.error(res.message || t('agent.messages.deleteFailed'))
+      MessagePlugin.error(res.message || resourceCopy.value.deleteFailed)
     }
   }).catch((e: any) => {
-    MessagePlugin.error(e?.message || t('agent.messages.deleteFailed'))
+    MessagePlugin.error(e?.message || resourceCopy.value.deleteFailed)
   })
 }
 
@@ -1588,19 +1662,19 @@ const formatDate = (dateStr: string) => {
 const openCreateModal = () => {
   editingAgent.value = null
   editorMode.value = 'create'
-  editorInitialSection.value = 'basic'
+  editorInitialSection.value = isWorkflowList.value ? 'workflow' : 'basic'
   editorInitialHighlightField.value = ''
   editorVisible.value = true
 }
 
 // 创建智能体
 const handleCreateAgent = () => {
-  if (!isReadyForAgent.value) {
+  if (!isWorkflowList.value && !isReadyForAgent.value) {
     MessagePlugin.warning(t('contextualGuide.tenantModels.needChatModelFirst'))
     uiStore.openSettings('models')
     return
   }
-  markContextualGuideDone('agentList')
+  if (!isWorkflowList.value) markContextualGuideDone('agentList')
   openCreateModal()
 }
 

@@ -187,6 +187,7 @@ export interface ApiResponse<T> {
 export interface ResourceCountsByOrg {
   knowledge_bases: { by_organization: Record<string, number> }
   agents: { by_organization: Record<string, number> }
+  workflows?: { by_organization: Record<string, number> }
 }
 
 export interface ListOrganizationsResponse {

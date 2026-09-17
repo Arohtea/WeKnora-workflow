@@ -85,7 +85,7 @@ func (s *resolveOwnAgentStub) ListAgents(context.Context) ([]*types.CustomAgent,
 	panic("not implemented")
 }
 func (s *resolveOwnAgentStub) UpdateAgent(
-	context.Context, *types.CustomAgent, *string,
+	context.Context, *types.CustomAgent, *string, *types.CustomAgentConfig,
 ) (*types.CustomAgent, error) {
 	panic("not implemented")
 }

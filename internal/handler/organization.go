@@ -279,11 +279,20 @@ func (h *OrganizationHandler) buildResourceCountsByOrg(ctx context.Context, orgs
 		byOrgKB[oid] = count
 	}
 	byOrgAgent := make(map[string]int)
+	byOrgWorkflow := make(map[string]int)
 	for _, o := range orgs {
 		byOrgAgent[o.ID] = 0
+		byOrgWorkflow[o.ID] = 0
 	}
 	for id, n := range agentCounts {
 		byOrgAgent[id] = int(n)
+	}
+	for orgID, items := range agentListByOrg {
+		for _, item := range items {
+			if item.Agent != nil && item.Agent.Config.AgentType == types.AgentTypeWorkflow {
+				byOrgWorkflow[orgID]++
+			}
+		}
 	}
 	return &types.ResourceCountsByOrgResponse{
 		KnowledgeBases: struct {
@@ -292,6 +301,9 @@ func (h *OrganizationHandler) buildResourceCountsByOrg(ctx context.Context, orgs
 		Agents: struct {
 			ByOrganization map[string]int `json:"by_organization"`
 		}{ByOrganization: byOrgAgent},
+		Workflows: struct {
+			ByOrganization map[string]int `json:"by_organization"`
+		}{ByOrganization: byOrgWorkflow},
 	}
 }
 

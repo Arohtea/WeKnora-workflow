@@ -18,6 +18,7 @@ export type ContextualGuideTourId =
   | 'tenantModels'
   | 'agentList'
   | 'agentCreate'
+  | 'workflowCreate'
 
 export const focusKbEditorSection = (section: string) => {
   window.dispatchEvent(
@@ -130,6 +131,13 @@ export const CONTEXTUAL_GUIDE_TOURS: Record<ContextualGuideTourId, ContextualGui
     stepI18nPrefix: 'contextualGuide.agentCreate.steps',
     openDelayMs: 450,
     alsoCompleteTours: ['agentList'],
+    steps: [],
+  },
+  // 步骤由 WorkflowCreateContextualGuide.vue 按"是否已有画布内容"动态组装
+  workflowCreate: {
+    storageKey: 'weknora:contextual-guide-workflow-create:v1',
+    stepI18nPrefix: 'contextualGuide.workflowCreate.steps',
+    openDelayMs: 600,
     steps: [],
   },
 }

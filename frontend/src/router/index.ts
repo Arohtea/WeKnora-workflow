@@ -137,6 +137,14 @@ const router = createRouter({
           path: "agents",
           name: "agentList",
           component: () => import("../views/agent/AgentList.vue"),
+          props: { resourceType: 'agent' },
+          meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'agents' }
+        },
+        {
+          path: "workflows",
+          name: "workflowList",
+          component: () => import("../views/agent/AgentList.vue"),
+          props: { resourceType: 'workflow' },
           meta: { requiresInit: true, requiresAuth: true, requiredCapability: 'agents' }
         },
         {

@@ -14,6 +14,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
+	workflowruntime "github.com/Tencent/WeKnora/internal/workflow"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,6 +23,11 @@ import (
 // on config mutation.
 type sandboxConfigLookup interface {
 	Get(ctx context.Context, tenantID uint64, id string) (*types.TenantSandboxConfigEntity, error)
+}
+
+type workflowAgentProvider interface {
+	ValidateWorkflowResources(ctx context.Context, config *types.CustomAgentConfig) error
+	WorkflowCatalog(ctx context.Context, agent *types.CustomAgent) (*types.WorkflowCatalog, error)
 }
 
 // CustomAgentHandler defines the HTTP handler for custom agent operations
@@ -35,6 +41,9 @@ type CustomAgentHandler struct {
 	// sandboxConfigs validates an agent's sandbox backend selection. Optional —
 	// nil in partially-wired unit tests, where the selection is left unchecked.
 	sandboxConfigs sandboxConfigLookup
+	// agentRuntime is optional in handler-only tests and exposes the narrow
+	// workflow runtime without expanding the public AgentService interface.
+	agentRuntime interfaces.AgentService
 }
 
 // NewCustomAgentHandler creates a new custom agent handler instance
@@ -44,6 +53,7 @@ func NewCustomAgentHandler(
 	disabledRepo interfaces.TenantDisabledSharedAgentRepository,
 	userService interfaces.UserService,
 	sandboxConfigs *service.TenantSandboxConfigService,
+	agentRuntime interfaces.AgentService,
 ) *CustomAgentHandler {
 	return &CustomAgentHandler{
 		service:        service,
@@ -51,6 +61,7 @@ func NewCustomAgentHandler(
 		disabledRepo:   disabledRepo,
 		userService:    userService,
 		sandboxConfigs: sandboxConfigs,
+		agentRuntime:   agentRuntime,
 	}
 }
 
@@ -70,8 +81,12 @@ type UpdateAgentRequest struct {
 	// an explicit clear: nil keeps the stored avatar, a pointer to "" wipes
 	// it. As a plain string the two cases were indistinguishable, so a caller
 	// that PUT only a config silently zeroed the avatar and still got a 200.
-	Avatar *string                 `json:"avatar"`
-	Config types.CustomAgentConfig `json:"config"`
+	Avatar *string `json:"avatar"`
+	// Config travels as a pointer for the same reason as avatar: nil means the
+	// caller did not send a configuration, so the stored one must survive. As a
+	// value type an omitted config became a zero struct, and for a workflow
+	// agent that replaced the stored graph with the default definition.
+	Config *types.CustomAgentConfig `json:"config"`
 }
 
 // CreateAgent godoc
@@ -98,11 +113,19 @@ func (h *CustomAgentHandler) CreateAgent(c *gin.Context) {
 		c.Error(errors.NewBadRequestError("Invalid request parameters").WithDetails(err.Error()))
 		return
 	}
+	if err := workflowruntime.NormalizeConfig(&req.Config); err != nil {
+		c.Error(errors.NewBadRequestError(err.Error()))
+		return
+	}
 	if err := authorizeAgentKnowledgeScope(ctx, req.Config); err != nil {
 		c.Error(err)
 		return
 	}
 	if err := h.validateAgentSandboxConfig(ctx, req.Config); err != nil {
+		c.Error(err)
+		return
+	}
+	if err := h.validateWorkflowResources(ctx, &req.Config); err != nil {
 		c.Error(err)
 		return
 	}
@@ -364,13 +387,26 @@ func (h *CustomAgentHandler) UpdateAgent(c *gin.Context) {
 		c.Error(errors.NewBadRequestError("Invalid request parameters").WithDetails(err.Error()))
 		return
 	}
-	if err := authorizeAgentKnowledgeScope(ctx, req.Config); err != nil {
-		c.Error(err)
-		return
-	}
-	if err := h.validateAgentSandboxConfig(ctx, req.Config); err != nil {
-		c.Error(err)
-		return
+	// Configuration-scoped validation only runs when the caller actually sent a
+	// configuration. Running it against a nil config would validate the zero
+	// value and could reject a metadata-only PUT that should be a no-op.
+	if req.Config != nil {
+		if err := workflowruntime.NormalizeConfig(req.Config); err != nil {
+			c.Error(errors.NewBadRequestError(err.Error()))
+			return
+		}
+		if err := authorizeAgentKnowledgeScope(ctx, *req.Config); err != nil {
+			c.Error(err)
+			return
+		}
+		if err := h.validateAgentSandboxConfig(ctx, *req.Config); err != nil {
+			c.Error(err)
+			return
+		}
+		if err := h.validateWorkflowResources(ctx, req.Config); err != nil {
+			c.Error(err)
+			return
+		}
 	}
 
 	// Only a sent avatar is validated: nil means the caller never touched the
@@ -385,13 +421,16 @@ func (h *CustomAgentHandler) UpdateAgent(c *gin.Context) {
 		}
 	}
 
-	// Build agent object. Avatar is deliberately absent here — it reaches the
-	// service as a separate pointer, so that "not sent" survives the trip.
+	// Build agent object. Avatar and Config are deliberately absent here — both
+	// reach the service as separate pointers, so that "not sent" survives the
+	// trip. The name and description are the only fields this PUT must carry.
 	agent := &types.CustomAgent{
 		ID:          id,
 		Name:        req.Name,
 		Description: req.Description,
-		Config:      req.Config,
+	}
+	if req.Config != nil {
+		agent.Config = *req.Config
 	}
 	agent.EnsureDefaults()
 	if err := agent.Config.QuestionSuggestions.Validate(); err != nil {
@@ -403,7 +442,7 @@ func (h *CustomAgentHandler) UpdateAgent(c *gin.Context) {
 		secutils.SanitizeForLog(id), secutils.SanitizeForLog(req.Name))
 
 	// Update the agent
-	updatedAgent, err := h.service.UpdateAgent(ctx, agent, req.Avatar)
+	updatedAgent, err := h.service.UpdateAgent(ctx, agent, req.Avatar, req.Config)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"agent_id": id,
@@ -547,7 +586,15 @@ func (h *CustomAgentHandler) CopyAgent(c *gin.Context) {
 		}
 		return
 	}
+	if err := workflowruntime.NormalizeConfig(&sourceAgent.Config); err != nil {
+		c.Error(errors.NewBadRequestError(err.Error()))
+		return
+	}
 	if err := authorizeAgentKnowledgeScope(ctx, sourceAgent.Config); err != nil {
+		c.Error(err)
+		return
+	}
+	if err := h.validateWorkflowResources(ctx, &sourceAgent.Config); err != nil {
 		c.Error(err)
 		return
 	}
@@ -622,6 +669,54 @@ func (h *CustomAgentHandler) GetAgentTypePresets(c *gin.Context) {
 		"success": true,
 		"data":    presets,
 	})
+}
+
+// GetWorkflowCatalog godoc
+// @Summary      获取工作流资源目录
+// @Description  返回当前智能体有权使用的内置工具、MCP 工具和已安装 Skill
+// @Tags         智能体
+// @Accept       json
+// @Produce      json
+// @Param        id   path      string  true  "智能体ID"
+// @Success      200  {object}  map[string]interface{}  "工作流资源目录"
+// @Failure      400  {object}  errors.AppError         "请求参数错误"
+// @Failure      404  {object}  errors.AppError         "智能体不存在"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /agents/{id}/workflow/catalog [get]
+func (h *CustomAgentHandler) GetWorkflowCatalog(c *gin.Context) {
+	ctx := c.Request.Context()
+	id := secutils.SanitizeForLog(c.Param("id"))
+	if id == "" {
+		c.Error(errors.NewBadRequestError("Agent ID cannot be empty"))
+		return
+	}
+	provider, ok := h.agentRuntime.(workflowAgentProvider)
+	if !ok {
+		c.Error(errors.NewInternalServerError("Workflow runtime is unavailable"))
+		return
+	}
+	agent, err := h.service.GetAgentByID(ctx, id)
+	if err != nil {
+		if err == service.ErrAgentNotFound {
+			c.Error(errors.NewNotFoundError("Agent not found"))
+			return
+		}
+		if appErr, ok := err.(*errors.AppError); ok {
+			c.Error(appErr)
+			return
+		}
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{"agent_id": id})
+		c.Error(errors.NewInternalServerError("Failed to load agent"))
+		return
+	}
+	catalog, err := provider.WorkflowCatalog(ctx, agent)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{"agent_id": id})
+		c.Error(errors.NewBadRequestError(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": catalog})
 }
 
 // GetSuggestedQuestions godoc
@@ -745,6 +840,22 @@ func (h *CustomAgentHandler) validateAgentSandboxConfig(
 	}
 	if stored == nil {
 		return errors.NewBadRequestError("所选沙箱后端配置不存在，请重新选择")
+	}
+	return nil
+}
+
+func (h *CustomAgentHandler) validateWorkflowResources(
+	ctx context.Context, cfg *types.CustomAgentConfig,
+) error {
+	if cfg == nil || cfg.AgentType != types.AgentTypeWorkflow {
+		return nil
+	}
+	provider, ok := h.agentRuntime.(workflowAgentProvider)
+	if !ok {
+		return errors.NewInternalServerError("Workflow runtime is unavailable")
+	}
+	if err := provider.ValidateWorkflowResources(ctx, cfg); err != nil {
+		return errors.NewBadRequestError(err.Error())
 	}
 	return nil
 }

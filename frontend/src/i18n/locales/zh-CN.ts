@@ -1698,6 +1698,7 @@ export default {
       newChat: '新建对话',
       knowledgeBases: '打开知识库',
       agents: '打开智能体',
+      workflows: '打开工作流',
       organizations: '打开共享空间',
       settings: '打开设置',
       productTour: '新手引导'
@@ -6970,6 +6971,26 @@ export default {
         }
       }
     },
+    workflowCreate: {
+      steps: {
+        templates: {
+          title: '从模板开始',
+          desc: '模板是别人已经连好线的流程。挑一个最接近你需求的，再把标出来的地方换成自己的知识库或工具就行。'
+        },
+        canvas: {
+          title: '这就是流程',
+          desc: '每个方块是一个步骤，箭头是它们的先后顺序。方块可以拖动位置，只影响画面排列，不影响运行顺序。'
+        },
+        palette: {
+          title: '添加一个步骤',
+          desc: '点击左侧的步骤就能加到画布上，然后从上一个方块拖一条线连过来。'
+        },
+        inspector: {
+          title: '在这里填内容',
+          desc: '选中哪个节点，它需要的填写项就出现在右边。带红色星号的是必填项，不填无法保存。'
+        }
+      }
+    },
     agentList: {
       steps: {
         create: {
@@ -7149,6 +7170,7 @@ export default {
     sessionInProgress: '会话进行中',
     knowledgeBase: '知识库',
     agents: '智能体',
+    workflows: '工作流',
     organizations: '共享空间',
     newChat: '新对话',
     settings: '系统设置',
@@ -7172,5 +7194,34 @@ export default {
     myChats: '我的对话',
     apiChats: 'API 会话',
     noSessions: '暂无对话'
+  },
+  workflow: {
+    title: '工作流',
+    subtitle: '把「先查资料、再判断、最后回复」这类固定步骤固定下来，让每次回答都走同一套流程',
+    createWorkflow: '创建工作流',
+    messages: {
+      created: '工作流创建成功',
+      deleted: '工作流已删除',
+      deleteFailed: '删除工作流失败',
+    },
+    delete: {
+      confirmTitle: '删除工作流',
+      confirmMessage: '确定要删除工作流「{name}」吗？此操作不可恢复。',
+      confirmButton: '确认删除',
+    },
+    detail: {
+      title: '工作流详情',
+    },
+    empty: {
+      title: '还没有工作流',
+      description: '工作流适合步骤固定的任务，比如先查知识库再回答、先让模型判断再分流。点击“创建工作流”，从现成模板开始最快。',
+      sharedTitle: '暂无共享工作流',
+      sharedDescription: '其他空间共享给你的工作流会显示在这里',
+      favoritesTitle: '暂无收藏的工作流',
+      favoritesDescription: '收藏工作流后可在这里快速访问',
+      recentsTitle: '暂无最近访问的工作流',
+      recentsDescription: '最近使用的工作流会显示在这里',
+    },
   }
 }
+

@@ -13,6 +13,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	workflowruntime "github.com/Tencent/WeKnora/internal/workflow"
 	"github.com/google/uuid"
 )
 
@@ -108,6 +109,9 @@ func (s *customAgentService) CreateAgent(ctx context.Context, agent *types.Custo
 
 	// Set defaults
 	agent.EnsureDefaults()
+	if err := workflowruntime.NormalizeConfig(&agent.Config); err != nil {
+		return nil, err
+	}
 	if err := agent.Config.QuestionSuggestions.Validate(); err != nil {
 		return nil, err
 	}
@@ -253,8 +257,13 @@ func (s *customAgentService) ListAgents(ctx context.Context) ([]*types.CustomAge
 // caller did not send an avatar and the stored one must survive, a pointer to
 // "" is an explicit clear. Assigning agent.Avatar unconditionally made every
 // config-only PUT erase the avatar while still answering 200.
+//
+// config carries presence for the same reason. As a value type an omitted
+// config arrived as a zero struct and replaced the stored one wholesale, which
+// for a workflow agent meant the saved graph was swapped for the default
+// definition — a silent data loss that still answered 200.
 func (s *customAgentService) UpdateAgent(
-	ctx context.Context, agent *types.CustomAgent, avatar *string,
+	ctx context.Context, agent *types.CustomAgent, avatar *string, config *types.CustomAgentConfig,
 ) (*types.CustomAgent, error) {
 	if agent.ID == "" {
 		logger.Error(ctx, "Agent ID is empty")
@@ -269,6 +278,9 @@ func (s *customAgentService) UpdateAgent(
 
 	// Handle built-in agents specially using registry
 	if types.IsBuiltinAgentID(agent.ID) {
+		if config != nil {
+			agent.Config = *config
+		}
 		return s.updateBuiltinAgent(ctx, agent, tenantID)
 	}
 
@@ -304,11 +316,18 @@ func (s *customAgentService) UpdateAgent(
 		}
 		existingAgent.Avatar = *avatar
 	}
-	existingAgent.Config = agent.Config
+	// An absent config keeps the stored one, which is what makes a metadata-only
+	// PUT safe.
+	if config != nil {
+		existingAgent.Config = *config
+	}
 	existingAgent.UpdatedAt = time.Now()
 
 	// Ensure defaults
 	existingAgent.EnsureDefaults()
+	if err := workflowruntime.NormalizeConfig(&existingAgent.Config); err != nil {
+		return nil, err
+	}
 	if err := existingAgent.Config.QuestionSuggestions.Validate(); err != nil {
 		return nil, err
 	}
@@ -346,6 +365,9 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 		existingAgent.Config = agent.Config
 		existingAgent.UpdatedAt = time.Now()
 		existingAgent.EnsureDefaults()
+		if err := workflowruntime.NormalizeConfig(&existingAgent.Config); err != nil {
+			return nil, err
+		}
 		if err := existingAgent.Config.QuestionSuggestions.Validate(); err != nil {
 			return nil, err
 		}
@@ -377,6 +399,9 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 		UpdatedAt:   time.Now(),
 	}
 	newAgent.EnsureDefaults()
+	if err := workflowruntime.NormalizeConfig(&newAgent.Config); err != nil {
+		return nil, err
+	}
 	if err := newAgent.Config.QuestionSuggestions.Validate(); err != nil {
 		return nil, err
 	}
@@ -481,6 +506,9 @@ func (s *customAgentService) CopyAgent(ctx context.Context, id string) (*types.C
 
 	// Ensure defaults
 	newAgent.EnsureDefaults()
+	if err := workflowruntime.NormalizeConfig(&newAgent.Config); err != nil {
+		return nil, err
+	}
 
 	logger.Infof(ctx, "Copying agent, source ID: %s, new ID: %s", id, newAgent.ID)
 

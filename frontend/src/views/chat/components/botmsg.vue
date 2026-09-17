@@ -299,6 +299,20 @@ const markdownRenderer = createChatMarkdownRenderer({
         if (artifactHtml !== null) return artifactHtml;
         return createSafeImage(href, text || '', title || '');
     },
+    linkRenderer: ({ href, text }) => {
+        if (isArtifactRefHref(href)) {
+            const artifactHtml = renderArtifactReference({
+                href,
+                alt: text || '',
+                artifacts: artifactList.value,
+                labels: artifactRefLabels.value,
+                context: artifactRefContext.value,
+                streaming: !props.session?.is_completed,
+            });
+            if (artifactHtml !== null) return artifactHtml;
+        }
+        return null;
+    },
     invalidImageHtml: () => `<p>${t('error.invalidImageLink')}</p>`,
     isValidImageUrl: (href) => isArtifactRefHref(href) || isValidImageURL(href),
 });

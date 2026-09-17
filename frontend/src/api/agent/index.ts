@@ -6,7 +6,99 @@ import { get, post, put, del } from "../../utils/request";
 // 'wiki-qa'      : Wiki 图谱导航问答
 // 'hybrid-rag-wiki': Wiki + 分块混合检索
 // 'custom'       : 完全自定义（不应用预设）
-export type AgentType = 'rag-qa' | 'wiki-qa' | 'hybrid-rag-wiki' | 'data-analysis' | 'custom';
+// 'workflow'     : 画布编排的确定性 DAG
+export type AgentType = 'rag-qa' | 'wiki-qa' | 'hybrid-rag-wiki' | 'data-analysis' | 'workflow' | 'custom';
+
+export type WorkflowNodeType =
+  | 'start'
+  | 'knowledge-retrieval'
+  | 'llm'
+  | 'llm-decision'
+  | 'http-request'
+  | 'tool'
+  | 'end';
+
+export interface WorkflowLLMNodeConfig {
+  system_prompt?: string;
+  prompt: string;
+  temperature?: number;
+  max_tokens?: number;
+}
+
+export type WorkflowToolKind = 'builtin' | 'mcp' | 'skill';
+
+export interface WorkflowPosition {
+  x: number;
+  y: number;
+}
+
+export interface WorkflowViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface WorkflowConditionItem {
+  variable: string;
+  operator: string;
+  value?: unknown;
+}
+
+export interface WorkflowCondition {
+  mode: 'all' | 'any';
+  items: WorkflowConditionItem[];
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: WorkflowNodeType;
+  name: string;
+  position: WorkflowPosition;
+  config: Record<string, unknown>;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  order: number;
+  is_default: boolean;
+  condition?: WorkflowCondition;
+}
+
+export interface WorkflowDefinition {
+  version: number;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  viewport: WorkflowViewport;
+}
+
+export interface WorkflowCatalogTool {
+  name: string;
+  display_name?: string;
+  description?: string;
+  parameters: Record<string, unknown> | unknown[];
+  require_approval?: boolean;
+}
+
+export interface WorkflowCatalogService {
+  id: string;
+  name: string;
+  description?: string;
+  tools: WorkflowCatalogTool[];
+}
+
+export interface WorkflowCatalogSkill {
+  name: string;
+  version?: string;
+  description?: string;
+}
+
+export interface WorkflowCatalog {
+  builtin_tools: WorkflowCatalogTool[];
+  mcp_services: WorkflowCatalogService[];
+  skills: WorkflowCatalogSkill[];
+}
 
 export interface QuestionSuggestionConfig {
   starters: {
@@ -36,6 +128,7 @@ export interface CustomAgentConfig {
   // 智能推理模式下的类型预设，用于一键应用"系统提示词 + 工具 + KB 兼容性"组合
   // 仅在 agent_mode === 'smart-reasoning' 时生效；quick-answer 模式忽略
   agent_type?: AgentType;
+  workflow?: WorkflowDefinition;
   system_prompt?: string;           // 统一系统提示词（使用 {{web_search_status}} 占位符动态控制行为）
   system_prompt_id?: string;        // 引用的 prompt template ID（预设会填入此字段）
   context_template_id?: string;     // Inherit the referenced context template when text is empty
@@ -203,6 +296,11 @@ export function listAgents(params?: {
 // 获取智能体详情
 export function getAgentById(id: string) {
   return get<{ data: CustomAgent }>(`/api/v1/agents/${id}`);
+}
+
+// 获取当前工作流智能体有权使用的资源目录
+export function getWorkflowCatalog(id: string) {
+  return get<{ data: WorkflowCatalog }>(`/api/v1/agents/${id}/workflow/catalog`);
 }
 
 // 创建智能体
