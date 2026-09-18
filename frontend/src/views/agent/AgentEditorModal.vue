@@ -1904,6 +1904,7 @@ import {
   updateAgent,
   listIMChannels,
   type CustomAgent,
+  type CustomAgentConfig,
   type PlaceholderDefinition,
   type AgentTypePreset,
   type AgentType,
@@ -1982,6 +1983,11 @@ const props = defineProps<{
   // wired here yet (the modal has 3000+ lines of form inputs); instead
   // we just remove the only mutation surface — the footer button.
   readOnly?: boolean;
+  initialDraft?: {
+    name?: string;
+    description?: string;
+    config?: CustomAgentConfig;
+  } | null;
 }>();
 
 const emit = defineEmits<{
@@ -3720,6 +3726,23 @@ watch(() => props.visible, async (val) => {
         }
       }
       applyDefaultModelsIfEmpty()
+      if (props.initialDraft) {
+        if (props.initialDraft.name) {
+          formData.value.name = props.initialDraft.name;
+        }
+        if (props.initialDraft.description) {
+          formData.value.description = props.initialDraft.description;
+        }
+        if (props.initialDraft.config) {
+          formData.value.config = {
+            ...formData.value.config,
+            ...props.initialDraft.config,
+          };
+          if (props.initialDraft.config.workflow) {
+            formData.value.config.workflow = JSON.parse(JSON.stringify(props.initialDraft.config.workflow));
+          }
+        }
+      }
     }
 
     await syncInstalledSkills()

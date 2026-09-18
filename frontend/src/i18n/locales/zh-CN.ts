@@ -7199,6 +7199,8 @@ export default {
     title: '工作流',
     subtitle: '把「先查资料、再判断、最后回复」这类固定步骤固定下来，让每次回答都走同一套流程',
     createWorkflow: '创建工作流',
+    importWorkflow: '导入工作流',
+    exportWorkflow: '导出工作流',
     messages: {
       created: '工作流创建成功',
       updated: '工作流更新成功',
@@ -7206,6 +7208,14 @@ export default {
       deleteFailed: '删除工作流失败',
       saveFailed: '保存工作流失败',
       nameRequired: '请输入工作流名称',
+      importSuccess: '工作流导入成功',
+      importFailed: '工作流导入失败',
+      exportSuccess: '工作流导出成功',
+      exportFailed: '工作流导出失败',
+    },
+    confirm: {
+      importOverwriteTitle: '确认导入工作流',
+      importOverwrite: '导入新流程将替换当前画布的所有节点与连线，是否继续？',
     },
     delete: {
       confirmTitle: '删除工作流',

@@ -8,11 +8,31 @@
         <div class="header-title" style="--wails-draggable: drag">
           <div class="title-row" style="--wails-draggable: drag">
             <h2 style="--wails-draggable: drag">{{ resourceCopy.title }}</h2>
-            <t-button v-if="authStore.hasRole('contributor') && isWorkflowList" variant="outline" theme="primary"
-              size="small" class="workflow-create-action" style="--wails-draggable: no-drag" @click="handleCreateAgent">
-              <template #icon><t-icon name="add" /></template>
-              创建工作流
-            </t-button>
+            <template v-if="authStore.hasRole('contributor') && isWorkflowList">
+              <t-button variant="outline" theme="primary"
+                size="small" class="workflow-create-action" style="--wails-draggable: no-drag" @click="handleCreateAgent">
+                <template #icon><t-icon name="add" /></template>
+                创建工作流
+              </t-button>
+              <t-button variant="outline" theme="default"
+                size="small" class="workflow-import-action" style="--wails-draggable: no-drag; margin-left: 8px;" @click="triggerListImportWorkflow">
+                <template #icon>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                </template>
+                导入工作流
+              </t-button>
+              <input
+                ref="workflowListFileInputRef"
+                type="file"
+                accept=".json,application/json"
+                style="display: none;"
+                @change="onListWorkflowFileSelected"
+              />
+            </template>
             <t-tooltip v-else-if="authStore.hasRole('contributor')" :content="resourceCopy.create" placement="bottom">
               <t-button variant="text" theme="default" size="small" class="header-action-btn"
                 data-guide="agent-list-create" style="--wails-draggable: no-drag" @click="handleCreateAgent">
@@ -214,6 +234,15 @@
                           class="menu-icon" name="edit" /><span>{{ $t('common.edit') }}</span></div>
                       <div v-if="authStore.hasRole('contributor')" class="popup-menu-item" @click="handleCopy(agent)">
                         <t-icon class="menu-icon" name="file-copy" /><span>{{ $t('common.copy') }}</span>
+                      </div>
+                      <div v-if="agent.config?.agent_type === 'workflow' || isWorkflowList" class="popup-menu-item"
+                        @click="handleExportWorkflow(agent)">
+                        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                        <span>{{ $t('workflow.exportWorkflow') || '导出工作流' }}</span>
                       </div>
                       <div v-if="authStore.hasRole('admin')" class="popup-menu-item"
                         @click="handleToggleDisabled(agent)">
@@ -418,6 +447,15 @@
                       <div v-if="authStore.hasRole('contributor')" class="popup-menu-item" @click="handleCopy(agent)">
                         <t-icon class="menu-icon" name="file-copy" />
                         <span>{{ $t('common.copy') }}</span>
+                      </div>
+                      <div v-if="agent.config?.agent_type === 'workflow' || isWorkflowList" class="popup-menu-item"
+                        @click="handleExportWorkflow(agent)">
+                        <svg class="menu-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                        <span>{{ $t('workflow.exportWorkflow') || '导出工作流' }}</span>
                       </div>
                       <div v-if="authStore.hasRole('admin')" class="popup-menu-item"
                         @click="handleToggleDisabled(agent)">
@@ -809,8 +847,9 @@
       :initialSection="editorInitialSection"
       :initialHighlightField="editorInitialHighlightField"
       :fixedAgentType="isWorkflowList ? 'workflow' : undefined"
+      :initialDraft="importedWorkflowDraft"
       :readOnly="editorMode === 'edit' && editingAgent != null && !canManageAgent(editingAgent as AgentWithUI)"
-      @update:visible="editorVisible = $event" @success="handleEditorSuccess" />
+      @update:visible="handleEditorVisibleUpdate" @success="handleEditorSuccess" />
 
     <TenantModelsGuide v-if="!isWorkflowList" :when="showAgentTenantModelsGuide" variant="agent" />
     <ContextualGuide v-if="!isWorkflowList" tour="agentList" :when="showAgentListContextualGuide" />
@@ -821,7 +860,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MessagePlugin, Icon as TIcon } from 'tdesign-vue-next'
-import { deleteAgent, copyAgent, type CustomAgent } from '@/api/agent'
+import { deleteAgent, copyAgent, getAgentById, type CustomAgent } from '@/api/agent'
+import { exportWorkflowPackage, parseWorkflowJSON, readJSONFile } from '@/utils/workflowExportImport'
 import { useChatResourcesStore } from '@/stores/chatResources'
 import { formatStringDate } from '@/utils/index'
 import { useI18n } from 'vue-i18n'
@@ -1658,8 +1698,86 @@ const formatDate = (dateStr: string) => {
   return formatStringDate(new Date(dateStr))
 }
 
+const importedWorkflowDraft = ref<any>(null)
+const workflowListFileInputRef = ref<HTMLInputElement | null>(null)
+
+const triggerListImportWorkflow = () => {
+  if (workflowListFileInputRef.value) {
+    workflowListFileInputRef.value.value = ''
+    workflowListFileInputRef.value.click()
+  }
+}
+
+const onListWorkflowFileSelected = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target?.files?.[0]
+  if (!file) return
+
+  try {
+    const fileText = await readJSONFile(file)
+    const result = parseWorkflowJSON(fileText)
+    if (!result.success) {
+      MessagePlugin.error(result.error)
+      return
+    }
+
+    importedWorkflowDraft.value = {
+      name: result.data.name || '导入的工作流',
+      description: result.data.description || '',
+      config: {
+        agent_type: 'workflow',
+        workflow: result.data.workflow,
+      },
+    }
+    editingAgent.value = null
+    editorMode.value = 'create'
+    editorInitialSection.value = 'workflow'
+    editorInitialHighlightField.value = ''
+    editorVisible.value = true
+    MessagePlugin.success(t('workflow.messages.importSuccess') || '工作流导入成功')
+  } catch (err: any) {
+    MessagePlugin.error(err?.message || (t('workflow.messages.importFailed') || '读取工作流文件失败'))
+  } finally {
+    if (target) {
+      target.value = ''
+    }
+  }
+}
+
+const handleEditorVisibleUpdate = (visible: boolean) => {
+  editorVisible.value = visible
+  if (!visible) {
+    importedWorkflowDraft.value = null
+  }
+}
+
+const handleExportWorkflow = async (agent: AgentWithUI) => {
+  try {
+    let targetAgent = agent
+    if (!targetAgent.config?.workflow) {
+      const res = await getAgentById(agent.id)
+      if (res?.data) {
+        targetAgent = res.data as AgentWithUI
+      }
+    }
+    if (!targetAgent.config?.workflow) {
+      MessagePlugin.warning('该工作流尚未配置有效的流程节点')
+      return
+    }
+    exportWorkflowPackage({
+      name: targetAgent.name,
+      description: targetAgent.description || '',
+      workflow: targetAgent.config.workflow,
+    })
+    MessagePlugin.success(t('workflow.messages.exportSuccess') || '工作流导出成功')
+  } catch (err: any) {
+    MessagePlugin.error(`导出失败：${err?.message || '未知错误'}`)
+  }
+}
+
 // 暴露创建方法供外部调用
 const openCreateModal = () => {
+  importedWorkflowDraft.value = null
   editingAgent.value = null
   editorMode.value = 'create'
   editorInitialSection.value = isWorkflowList.value ? 'workflow' : 'basic'

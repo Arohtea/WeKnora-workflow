@@ -38,6 +38,39 @@
         </button>
         <button
           type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--icon"
+          title="导入工作流 (JSON)"
+          :disabled="disabled"
+          @click="triggerImportWorkflow"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--icon"
+          title="导出工作流 (JSON)"
+          :disabled="disabled || flowNodes.length === 0"
+          @click="triggerExportWorkflow"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </button>
+        <input
+          ref="workflowFileInputRef"
+          type="file"
+          accept=".json,application/json"
+          style="display: none;"
+          @change="onWorkflowFileSelected"
+        />
+        <button
+          type="button"
           class="workflow-toolbar-btn"
           :class="{ 'is-active': showTemplateGallery }"
           :disabled="disabled"
@@ -1061,8 +1094,9 @@ import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { MiniMap } from '@vue-flow/minimap';
 import { ConnectionMode, Handle, MarkerType, Position, VueFlow, useVueFlow, type Connection } from '@vue-flow/core';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next';
 import { copyToClipboard } from '@/utils/clipboard';
+import { exportWorkflowPackage, parseWorkflowJSON, readJSONFile } from '@/utils/workflowExportImport';
 import type {
   WorkflowCatalog,
   WorkflowCatalogService,
@@ -3209,11 +3243,110 @@ function validateDefinition(): boolean {
   return passValidation();
 }
 
-// 父组件需要知道画布是否还是空白流程，用来决定是否展示首次引导。
+const workflowFileInputRef = ref<HTMLInputElement | null>(null);
+
+/**
+ * 触发当前画布工作流导出为标准 JSON 文件
+ */
+function triggerExportWorkflow() {
+  const definition = toDefinition();
+  if (!definition.nodes || definition.nodes.length === 0) {
+    MessagePlugin.warning('当前画布没有任何节点，无法导出');
+    return;
+  }
+  try {
+    exportWorkflowPackage({
+      name: '工作流',
+      description: '',
+      workflow: definition,
+    });
+    showHint('工作流导出成功');
+    MessagePlugin.success('工作流导出成功');
+  } catch (err: any) {
+    MessagePlugin.error(`导出失败：${err?.message || '未知错误'}`);
+  }
+}
+
+/**
+ * 唤起本地 JSON 文件选择器
+ */
+function triggerImportWorkflow() {
+  if (props.disabled) return;
+  if (workflowFileInputRef.value) {
+    workflowFileInputRef.value.value = '';
+    workflowFileInputRef.value.click();
+  }
+}
+
+/**
+ * 处理用户选中的工作流 JSON 文件
+ */
+async function onWorkflowFileSelected(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const file = target?.files?.[0];
+  if (!file) return;
+
+  try {
+    const fileText = await readJSONFile(file);
+    const result = parseWorkflowJSON(fileText);
+    if (!result.success) {
+      MessagePlugin.error(result.error);
+      return;
+    }
+
+    const newWorkflow = result.data.workflow;
+
+    const doApplyImport = () => {
+      // 记录撤回快照，确保用户可以 Ctrl+Z 一键撤回
+      pushSnapshot();
+      loadDefinition(newWorkflow);
+      emitDefinition();
+      nextTick(() => {
+        fitCanvas();
+        showHint('已成功载入导入的工作流');
+      });
+      MessagePlugin.success('工作流导入成功');
+    };
+
+    // 如果当前画布已经有节点（且不是全新空白模板），弹出二次确认
+    if (flowNodes.value.length > 0 && !isUntouchedDefinition(toDefinition())) {
+      const confirmDialog = DialogPlugin.confirm({
+        header: '确认导入工作流',
+        body: '导入新流程将替换当前画布的所有节点与连线，是否继续？',
+        confirmBtn: { content: '确认导入', theme: 'primary' },
+        cancelBtn: { content: '取消' },
+        onConfirm: () => {
+          confirmDialog.destroy();
+          doApplyImport();
+        },
+        onClose: () => {
+          confirmDialog.destroy();
+        },
+      });
+    } else {
+      doApplyImport();
+    }
+  } catch (err: any) {
+    MessagePlugin.error(err?.message || '读取工作流文件失败');
+  } finally {
+    if (target) {
+      target.value = '';
+    }
+  }
+}
+
+// 暴露给父组件的能力
 defineExpose({
   validate: validateDefinition,
   isUntouched: () => isUntouchedFlow.value,
   isTemplateGalleryOpen: () => showTemplateGallery.value,
+  loadWorkflowDefinition: (def: WorkflowDefinition) => {
+    loadDefinition(def);
+    nextTick(() => {
+      fitCanvas();
+    });
+  },
+  toDefinition,
 });
 </script>
 
