@@ -223,10 +223,11 @@
                     </div>
                     <div v-else-if="event.output" class="tool-output-wrapper">
                       <div class="fallback-header">
-                        <span class="fallback-label">{{ $t('chat.rawOutputLabel') }}</span>
+                        <span class="fallback-label">{{ (event.is_workflow || event.tool_name?.startsWith('workflow.')) ? ($t('workflow.nodeOutput') || '节点输出') : $t('chat.rawOutputLabel') }}</span>
                       </div>
                       <div class="detail-output-wrapper">
-                        <div class="detail-output">{{ event.output }}</div>
+                        <div v-if="event.is_workflow || event.tool_name?.startsWith('workflow.')" class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
+                        <div v-else class="detail-output">{{ event.output }}</div>
                       </div>
                     </div>
                     <!-- Raw arguments hidden for user-friendly display -->
@@ -520,10 +521,11 @@
 
                   <div v-else-if="event.output" class="tool-output-wrapper">
                     <div class="fallback-header">
-                      <span class="fallback-label">{{ $t('chat.rawOutputLabel') }}</span>
+                      <span class="fallback-label">{{ (event.is_workflow || event.tool_name?.startsWith('workflow.')) ? ($t('workflow.nodeOutput') || '节点输出') : $t('chat.rawOutputLabel') }}</span>
                     </div>
                     <div class="detail-output-wrapper">
-                      <div class="detail-output">{{ event.output }}</div>
+                      <div v-if="event.is_workflow || event.tool_name?.startsWith('workflow.')" class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
+                      <div v-else class="detail-output">{{ event.output }}</div>
                     </div>
                   </div>
 
@@ -749,6 +751,10 @@ const getLocalizedToolName = (toolName?: string | null): string => {
   // Format MCP tool names: "mcp_my_server_search_docs" → "My Server: search docs"
   if (toolName.startsWith('mcp_')) {
     return formatMCPToolName(toolName);
+  }
+
+  if (toolName.startsWith('workflow.')) {
+    return t('workflow.workflowNode') || '工作流节点';
   }
 
   return toolName;
@@ -2836,6 +2842,17 @@ const getToolTitle = (event: any): string => {
   if (event.tool_name === 'local_browser') return browserToolTitle(t, event);
   const mcpTitle = getMcpToolTitle(t, event)
   if (mcpTitle) return mcpTitle
+
+  // 工作流节点：优先使用用户配置的节点名称，避免显示内部 workflow.node_xxx
+  if (event.is_workflow || event.tool_name?.startsWith('workflow.')) {
+    const nodeName = event.node_name || event.arguments?.node_name || event.tool_data?.node_name || event.hint;
+    if (nodeName) {
+      return event.pending ? `${nodeName}...` : nodeName;
+    }
+    const nodeType = event.node_type || event.arguments?.node_type || event.tool_data?.node_type;
+    const typeLabel = nodeType ? (t(`workflow.nodeType.${nodeType}`) || nodeType) : (t('workflow.workflowNode') || '工作流节点');
+    return event.pending ? `${typeLabel}...` : typeLabel;
+  }
   if (event.pending) {
     if (event.tool_name === 'image_analysis') {
       return t('agentStream.toolStatus.imageAnalyzing');

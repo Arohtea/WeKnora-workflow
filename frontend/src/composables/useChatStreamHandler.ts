@@ -782,6 +782,9 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
             const resolvedMcpTarget =
               toolCallEvent.tool_name === 'call_mcp_tool' && incomingToolName?.startsWith('mcp_')
             if (incomingToolName) toolCallEvent.tool_name = incomingToolName
+            if (dataPayload.node_name) toolCallEvent.node_name = dataPayload.node_name
+            if (dataPayload.node_type) toolCallEvent.node_type = dataPayload.node_type
+            if (dataPayload.is_workflow) toolCallEvent.is_workflow = true
             if (incomingArguments) {
               if (resolvedMcpTarget) {
                 // The executor now supplies the target's arguments; discard
@@ -802,6 +805,9 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
               arguments: incomingArguments,
               timestamp: Date.now(),
               pending: true,
+              node_name: dataPayload.node_name,
+              node_type: dataPayload.node_type,
+              is_workflow: dataPayload.is_workflow,
             }
             stream.push(newToolCallEvent)
             pending.set(toolCallId, newToolCallEvent)
@@ -864,6 +870,9 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
             toolCallEvent.duration_ms = duration
             toolCallEvent.display_type = dataPayload.display_type
             toolCallEvent.tool_data = dataPayload
+            if (dataPayload.node_name) toolCallEvent.node_name = dataPayload.node_name
+            if (dataPayload.node_type) toolCallEvent.node_type = dataPayload.node_type
+            if (dataPayload.is_workflow) toolCallEvent.is_workflow = true
             log('[Tool Result] Updated event in stream')
           } else {
             console.warn('[Tool Result] No pending tool call found for', toolCallId || toolName)

@@ -4,23 +4,53 @@
         'is-sidebar-collapsed': uiStore.sidebarCollapsed,
         'has-references-panel': referencesDrawerVisible,
         'has-sandbox-panel': sandboxPanel.visible.value,
+        'has-workflow-panel': workflowDrawerVisible && isWorkflowChat,
     }" :style="{ '--sandbox-panel-width': `${sandboxPanel.width.value}px` }">
         <ChatHeader v-if="!embeddedMode" :session="currentSession" :has-references-panel="referencesDrawerVisible" />
-        <!-- 沙箱面板收起时：图标与左侧栏展开按钮同一套，位置镜像会话左上角三个点。 -->
-        <div v-if="!embeddedMode && !sandboxPanel.visible.value" class="sandbox-header-toggle">
-            <t-tooltip placement="bottom">
-                <template #content>{{ t('chatHeader.toggleSandboxPanel') }}</template>
-                <button type="button" class="sandbox-header-toggle__btn"
-                    :aria-label="t('chatHeader.toggleSandboxPanel')" @click="sandboxPanel.open()">
-                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"
-                        aria-hidden="true">
-                        <rect x="1.5" y="1.5" width="17" height="17" rx="3" stroke="currentColor" stroke-width="1.2" />
-                        <line x1="12.5" y1="1.5" x2="12.5" y2="18.5" stroke="currentColor" stroke-width="1.2" />
-                        <line x1="16" y1="7.5" x2="16" y2="12.5" stroke="currentColor" stroke-width="1.2"
-                            stroke-linecap="round" />
-                    </svg>
-                </button>
-            </t-tooltip>
+        <div v-if="!embeddedMode" class="chat-top-actions">
+            <!-- 工作流执行轨迹入口 -->
+            <div v-if="isWorkflowChat" class="workflow-header-toggle">
+                <t-tooltip placement="bottom">
+                    <template #content>{{ workflowDrawerVisible ? t('chat.collapseWorkflowGraph') : t('chat.expandWorkflowGraph') }}</template>
+                    <button type="button" class="workflow-header-toggle__btn"
+                        :class="{ 'is-active': workflowDrawerVisible, 'is-running': Boolean(workflowActiveNodeId) }"
+                        :aria-label="workflowDrawerVisible ? t('chat.collapseWorkflowGraph') : t('chat.expandWorkflowGraph')"
+                        @click="toggleWorkflowDrawer">
+                        <span class="workflow-toggle-icon">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="6" height="6" rx="1" />
+                                <rect x="15" y="3" width="6" height="6" rx="1" />
+                                <rect x="9" y="15" width="6" height="6" rx="1" />
+                                <path d="M6 9v3a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9" />
+                                <path d="M12 13v2" />
+                            </svg>
+                        </span>
+                        <span v-if="workflowRunningNodeName" class="workflow-toggle-label">
+                            {{ workflowRunningNodeName }}
+                        </span>
+                        <span v-else class="workflow-toggle-label">
+                            {{ t('chat.workflowGraph') }}
+                        </span>
+                        <span v-if="workflowActiveNodeId" class="workflow-toggle-pulse-dot" />
+                    </button>
+                </t-tooltip>
+            </div>
+            <!-- 沙箱面板收起时：图标与左侧栏展开按钮同一套，位置镜像会话左上角三个点。 -->
+            <div v-if="!sandboxPanel.visible.value" class="sandbox-header-toggle">
+                <t-tooltip placement="bottom">
+                    <template #content>{{ t('chatHeader.toggleSandboxPanel') }}</template>
+                    <button type="button" class="sandbox-header-toggle__btn"
+                        :aria-label="t('chatHeader.toggleSandboxPanel')" @click="sandboxPanel.open()">
+                        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"
+                            aria-hidden="true">
+                            <rect x="1.5" y="1.5" width="17" height="17" rx="3" stroke="currentColor" stroke-width="1.2" />
+                            <line x1="12.5" y1="1.5" x2="12.5" y2="18.5" stroke="currentColor" stroke-width="1.2" />
+                            <line x1="16" y1="7.5" x2="16" y2="12.5" stroke="currentColor" stroke-width="1.2"
+                                stroke-linecap="round" />
+                        </svg>
+                    </button>
+                </t-tooltip>
+            </div>
         </div>
         <div class="chat_thread">
             <div ref="scrollContainer" class="chat_scroll_box" @scroll="handleScroll">
@@ -171,6 +201,15 @@
         :agent-source-tenant-id="useSettingsStoreInstance.selectedAgentSourceTenantId"
         :shifted="referencesDrawerVisible"
         :artifacts="sessionArtifacts" :artifacts-collecting="sessionArtifactsCollecting" />
+    <WorkflowLiveTraceDrawer
+        v-if="!embeddedMode && isWorkflowChat"
+        v-model:visible="workflowDrawerVisible"
+        :title="workflowAgentName ? `${workflowAgentName} · 执行图` : '工作流执行轨迹'"
+        :definition="workflowDefinition"
+        :active-node-id="workflowActiveNodeId"
+        :completed-node-ids="workflowCompletedNodeIds"
+        :failed-node-ids="workflowFailedNodeIds"
+    />
 </template>
 <script setup>
 import { makeSteerClientId } from '@/utils/steerId';
@@ -221,6 +260,8 @@ import SandboxSidePanel from '@/components/chat/SandboxSidePanel.vue';
 import BrowserTaskPreview from './components/BrowserTaskPreview.vue';
 import { collectSessionArtifacts } from '@/utils/sessionArtifacts';
 import { isCollectingSkillArtifacts } from '@/utils/skillArtifacts';
+import WorkflowLiveTraceDrawer from '@/components/chat/WorkflowLiveTraceDrawer.vue';
+import { getAgentById } from '@/api/agent';
 const referencesDrawer = provideChatReferencesDrawer();
 provideChatAttachmentPreviewDrawer();
 const sandboxPanel = provideChatSandboxPanel();
@@ -338,6 +379,116 @@ const userHasScrolledUp = ref(false)
 const SCROLL_BOTTOM_THRESHOLD = 80
 const minimapTargetId = ref('')
 let minimapFlashTimer = null
+
+// ===== 工作流执行图状态 =====
+/** 当前激活的工作流智能体是否为工作流类型 */
+const isWorkflowChat = ref(false);
+/** 是否展开右侧工作流执行图抽屉 */
+const workflowDrawerVisible = ref(false);
+/** 当前工作流的 Definition（来自 agent config） */
+const workflowDefinition = ref(null);
+/** 工作流智能体名称（用于抽屉标题） */
+const workflowAgentName = ref('');
+
+/** 当前正在执行的节点 ID（从最新 assistant agentEventStream 中实时解析） */
+const workflowActiveNodeId = computed(() => {
+    const latest = findLatestAssistantStream();
+    if (!latest) return null;
+    return extractActiveWorkflowNodeId(latest);
+});
+
+/** 正在执行的节点名称（用于按钮动态标签） */
+const workflowRunningNodeName = computed(() => {
+    const latest = findLatestAssistantStream();
+    if (!latest || !workflowActiveNodeId.value) return '';
+    const event = latest.find(
+        (e) => e.type === 'tool_call' && e.tool_call_id === workflowActiveNodeId.value && e.node_name,
+    );
+    return event?.node_name || '';
+});
+
+/** 已完成的节点 ID 列表 */
+const workflowCompletedNodeIds = computed(() => {
+    const latest = findLatestAssistantStream();
+    if (!latest) return [];
+    return extractCompletedWorkflowNodeIds(latest);
+});
+
+/** 执行失败的节点 ID 列表 */
+const workflowFailedNodeIds = computed(() => {
+    const latest = findLatestAssistantStream();
+    if (!latest) return [];
+    return extractFailedWorkflowNodeIds(latest);
+});
+
+/** 获取最新 assistant 消息的 agentEventStream */
+const findLatestAssistantStream = () => {
+    for (let i = messagesList.length - 1; i >= 0; i--) {
+        const msg = messagesList[i];
+        if (msg?.role === 'assistant' && Array.isArray(msg.agentEventStream)) {
+            return msg.agentEventStream;
+        }
+    }
+    return null;
+};
+
+/** 从 agentEventStream 提取当前正在 pending 的工作流 tool_call_id */
+const extractActiveWorkflowNodeId = (stream) => {
+    for (let i = stream.length - 1; i >= 0; i--) {
+        const e = stream[i];
+        if (e?.type === 'tool_call' && e.is_workflow && e.pending) {
+            return e.tool_call_id;
+        }
+    }
+    return null;
+};
+
+/** 从 agentEventStream 提取已成功完成的工作流节点 ID 列表 */
+const extractCompletedWorkflowNodeIds = (stream) => {
+    return stream
+        .filter((e) => e?.type === 'tool_call' && e.is_workflow && !e.pending && e.success !== false)
+        .map((e) => e.tool_call_id);
+};
+
+/** 从 agentEventStream 提取执行失败的工作流节点 ID 列表 */
+const extractFailedWorkflowNodeIds = (stream) => {
+    return stream
+        .filter((e) => e?.type === 'tool_call' && e.is_workflow && !e.pending && e.success === false)
+        .map((e) => e.tool_call_id);
+};
+
+/** 切换工作流执行图面板 */
+const toggleWorkflowDrawer = () => {
+    workflowDrawerVisible.value = !workflowDrawerVisible.value;
+};
+
+/** 根据 selectedAgentId 加载工作流定义 */
+const loadWorkflowDefinition = async (agentId) => {
+    if (!agentId || agentId.startsWith('builtin-')) {
+        isWorkflowChat.value = false;
+        workflowDefinition.value = null;
+        workflowDrawerVisible.value = false;
+        workflowAgentName.value = '';
+        return;
+    }
+    try {
+        const res = await getAgentById(agentId);
+        const agent = res?.data;
+        if (agent?.config?.agent_type === 'workflow' && agent.config.workflow) {
+            isWorkflowChat.value = true;
+            workflowDefinition.value = agent.config.workflow;
+            workflowAgentName.value = agent.name || '';
+        } else {
+            isWorkflowChat.value = false;
+            workflowDefinition.value = null;
+            workflowDrawerVisible.value = false;
+            workflowAgentName.value = '';
+        }
+    } catch {
+        isWorkflowChat.value = false;
+        workflowDefinition.value = null;
+    }
+};
 
 const isNearBottom = () => {
     if (!scrollContainer.value) return true;
@@ -1449,7 +1600,23 @@ onMounted(async () => {
         }
         getmsgList(data)
     }
+    // 初始加载时获取工作流定义
+    if (!props.embeddedMode) {
+        const initAgentId = useSettingsStoreInstance.selectedAgentId;
+        if (initAgentId) loadWorkflowDefinition(initAgentId);
+    }
 })
+
+// 监听智能体切换，动态更新工作流定义与入口显隐
+watch(
+    () => useSettingsStoreInstance.selectedAgentId,
+    (newId) => {
+        if (!props.embeddedMode) {
+            loadWorkflowDefinition(newId || '');
+        }
+    },
+);
+
 const clearData = () => {
     if (!props.embeddedMode) sessionActivity.detach(activitySessionId.value);
     activitySessionId.value = '';
@@ -1530,7 +1697,7 @@ onBeforeRouteUpdate((to, from, next) => {
                 padding-top: 0;
             }
 
-            .sandbox-header-toggle {
+            .chat-top-actions {
                 right: 432px;
             }
         }
@@ -1598,13 +1765,96 @@ onBeforeRouteUpdate((to, from, next) => {
     overflow: hidden;
 }
 
-// 沙箱面板入口：chrome 对齐会话左上角三个点（毛玻璃底 + 24px 图标按钮），
-// 图标是左侧栏 sidebar-toggle 的水平镜像（栏在右侧）。
-.sandbox-header-toggle {
+// 右上角顶部操作区：包含工作流图和沙箱面板两个入口，水平排列
+.chat-top-actions {
     position: absolute;
     top: 10px;
     right: 12px;
     z-index: 6;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+}
+
+// 工作流执行图入口胶囊按钮
+.workflow-header-toggle {
+    display: inline-flex;
+    align-items: center;
+}
+
+.workflow-header-toggle__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 10px 0 8px;
+    border: 1px solid var(--td-component-border, #e3e6eb);
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--td-text-color-secondary);
+    background: color-mix(in srgb, var(--td-bg-color-container) 92%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    white-space: nowrap;
+    max-width: 160px;
+
+    .workflow-toggle-icon {
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+        opacity: 0.7;
+    }
+
+    .workflow-toggle-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .workflow-toggle-pulse-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #0052d9;
+        flex-shrink: 0;
+        box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.2);
+        animation: workflowPulseDot 1.5s ease infinite;
+    }
+
+    &:hover {
+        color: var(--td-text-color-primary);
+        background: var(--td-bg-color-container-hover);
+        border-color: var(--td-brand-color-light-5, #bdd2fa);
+    }
+
+    &.is-active {
+        color: var(--td-brand-color, #0052d9);
+        background: color-mix(in srgb, #0052d9 8%, transparent);
+        border-color: color-mix(in srgb, #0052d9 35%, transparent);
+
+        .workflow-toggle-icon {
+            opacity: 1;
+        }
+    }
+
+    &.is-running {
+        color: #0052d9;
+        border-color: rgba(0, 82, 217, 0.4);
+    }
+}
+
+@keyframes workflowPulseDot {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.2); }
+    50% { box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.08); }
+}
+
+// 沙箱面板入口：chrome 对齐会话左上角三个点（毛玻璃底 + 24px 图标按钮），
+// 图标是左侧栏 sidebar-toggle 的水平镜像（栏在右侧）。
+.sandbox-header-toggle {
     display: inline-flex;
     align-items: center;
     padding: 2px;
@@ -1613,7 +1863,6 @@ onBeforeRouteUpdate((to, from, next) => {
     background: color-mix(in srgb, var(--td-bg-color-container) 88%, transparent);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    pointer-events: auto;
 }
 
 .sandbox-header-toggle__btn {

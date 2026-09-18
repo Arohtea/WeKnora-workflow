@@ -85,9 +85,12 @@ type workflowExecutor struct {
 	semaphore        chan struct{}
 	stepMu           sync.Mutex
 	nextStepNumber   int
-	nodes            map[string]types.WorkflowNode
-	outgoing         map[string][]types.WorkflowEdge
-	incoming         map[string][]types.WorkflowEdge
+	nodes               map[string]types.WorkflowNode
+	outgoing            map[string][]types.WorkflowEdge
+	incoming            map[string][]types.WorkflowEdge
+	finalAnswerStreamed bool
+	finalAnswerMu       sync.Mutex
+	finalAnswerEventID  string
 }
 
 // runWorkflowQA 执行已保存的工作流，并通过现有 Agent 事件总线输出结果。
@@ -208,9 +211,10 @@ func (s *sessionService) runWorkflowQA(
 		requestID:        requestID,
 		inputQuery:       inputQuery,
 		semaphore:        make(chan struct{}, workflowruntime.MaxParallelNodes),
-		nodes:            nodes,
-		outgoing:         outgoing,
-		incoming:         incoming,
+		nodes:              nodes,
+		outgoing:           outgoing,
+		incoming:           incoming,
+		finalAnswerEventID: generateEventID("workflow-answer"),
 	}
 	variables := map[string]interface{}{
 		"input": map[string]interface{}{
@@ -286,25 +290,47 @@ func (s *sessionService) runWorkflowQA(
 			logger.Warnf(ctx, "Failed to emit workflow references: %v", err)
 		}
 	}
-	answerID := generateEventID("workflow-answer")
-	for _, answerEvent := range []event.Event{
-		{
-			ID:        answerID,
-			Type:      event.EventAgentFinalAnswer,
-			SessionID: req.Session.ID,
-			RequestID: requestID,
-			Data:      event.AgentFinalAnswerData{Content: finalAnswer},
-		},
-		{
+	answerID := executor.finalAnswerEventID
+	if answerID == "" {
+		answerID = generateEventID("workflow-answer")
+	}
+
+	executor.finalAnswerMu.Lock()
+	streamed := executor.finalAnswerStreamed
+	executor.finalAnswerMu.Unlock()
+
+	if streamed {
+		if err := eventBus.Emit(ctx, event.Event{
 			ID:        answerID,
 			Type:      event.EventAgentFinalAnswer,
 			SessionID: req.Session.ID,
 			RequestID: requestID,
 			Data:      event.AgentFinalAnswerData{Done: true},
-		},
-	} {
-		if err := eventBus.Emit(ctx, answerEvent); err != nil {
-			logger.Warnf(ctx, "Failed to emit workflow answer event: %v", err)
+		}); err != nil {
+			logger.Warnf(ctx, "Failed to emit workflow answer done event: %v", err)
+		}
+	} else {
+		chunks := splitAnswerIntoStreamChunks(finalAnswer, 24)
+		for _, chunk := range chunks {
+			if err := eventBus.Emit(ctx, event.Event{
+				ID:        answerID,
+				Type:      event.EventAgentFinalAnswer,
+				SessionID: req.Session.ID,
+				RequestID: requestID,
+				Data:      event.AgentFinalAnswerData{Content: chunk},
+			}); err != nil {
+				logger.Warnf(ctx, "Failed to emit workflow answer chunk: %v", err)
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+		if err := eventBus.Emit(ctx, event.Event{
+			ID:        answerID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: req.Session.ID,
+			RequestID: requestID,
+			Data:      event.AgentFinalAnswerData{Done: true},
+		}); err != nil {
+			logger.Warnf(ctx, "Failed to emit workflow answer done: %v", err)
 		}
 	}
 
@@ -677,7 +703,26 @@ func (e *workflowExecutor) executeRetrieval(
 	}, nil
 }
 
-// executeLLM 执行通用大模型处理节点，支持自定义 Prompt 模板与文本生成。
+// isTerminalAnswerNode 探测指定节点是否作为生成最终回答的直连终态节点。
+func (e *workflowExecutor) isTerminalAnswerNode(nodeID string) bool {
+	edges := e.outgoing[nodeID]
+	for _, edge := range edges {
+		targetNode, exists := e.nodes[edge.Target]
+		if exists && targetNode.Type == types.WorkflowNodeTypeEnd {
+			var endCfg types.WorkflowEndNodeConfig
+			if len(targetNode.Config) > 0 {
+				_ = json.Unmarshal(targetNode.Config, &endCfg)
+			}
+			tmpl := strings.TrimSpace(endCfg.TextTemplate)
+			if tmpl == "" || tmpl == fmt.Sprintf("{{nodes.%s.text}}", nodeID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// executeLLM 执行通用大模型处理节点，支持自定义 Prompt 模板与流式文本生成。
 //
 // @param node 当前节点定义。
 // @param variables 上游上下文变量表。
@@ -721,24 +766,62 @@ func (e *workflowExecutor) executeLLM(
 
 	callCtx, cancel := context.WithTimeout(e.ctx, workflowLLMTimeout)
 	defer cancel()
-	response, err := e.model.Chat(callCtx, messages, options)
+
+	isTerminal := e.isTerminalAnswerNode(node.ID)
+
+	stream, err := e.model.ChatStream(callCtx, messages, options)
 	if err != nil {
 		return workflowNodeExecution{}, err
 	}
-	if response == nil {
-		return workflowNodeExecution{}, fmt.Errorf("LLM node returned no response")
+	if stream == nil {
+		return workflowNodeExecution{}, fmt.Errorf("LLM node returned nil stream")
 	}
 
-	data := map[string]interface{}{
-		"text": response.Content,
+	var fullContent strings.Builder
+	var fullReasoning strings.Builder
+	var usage types.TokenUsage
+
+	for chunk := range stream {
+		if chunk.ResponseType == types.ResponseTypeThinking {
+			fullReasoning.WriteString(chunk.Content)
+			continue
+		}
+		if chunk.Content != "" {
+			fullContent.WriteString(chunk.Content)
+			if isTerminal {
+				e.finalAnswerMu.Lock()
+				e.finalAnswerStreamed = true
+				e.finalAnswerMu.Unlock()
+
+				_ = e.eventBus.Emit(e.ctx, event.Event{
+					ID:        e.finalAnswerEventID,
+					Type:      event.EventAgentFinalAnswer,
+					SessionID: e.sessionID,
+					RequestID: e.requestID,
+					Data: event.AgentFinalAnswerData{
+						Content: chunk.Content,
+					},
+				})
+			}
+		}
+		if chunk.Usage != nil {
+			usage.Accumulate(*chunk.Usage)
+		}
 	}
-	if response.ReasoningContent != "" {
-		data["reasoning_content"] = response.ReasoningContent
+
+	contentStr := fullContent.String()
+	reasoningStr := fullReasoning.String()
+
+	data := map[string]interface{}{
+		"text": contentStr,
+	}
+	if reasoningStr != "" {
+		data["reasoning_content"] = reasoningStr
 	}
 	return workflowNodeExecution{
-		output: &types.WorkflowNodeOutput{Text: response.Content, Data: data, Status: "success"},
-		result: &types.ToolResult{Success: true, Output: response.Content, Data: data},
-		usage:  response.Usage,
+		output: &types.WorkflowNodeOutput{Text: contentStr, Data: data, Status: "success"},
+		result: &types.ToolResult{Success: true, Output: contentStr, Data: data},
+		usage:  usage,
 	}, nil
 }
 
@@ -1054,6 +1137,13 @@ func (e *workflowExecutor) syntheticStep(
 func (e *workflowExecutor) emitNodeCall(
 	node types.WorkflowNode, toolName, callID string, args map[string]interface{}, iteration int,
 ) {
+	if args == nil {
+		args = make(map[string]interface{})
+	}
+	args["node_name"] = node.Name
+	args["node_type"] = node.Type
+	args["is_workflow"] = true
+
 	if err := e.eventBus.Emit(e.ctx, event.Event{
 		ID:        callID,
 		Type:      event.EventAgentToolCall,
@@ -1081,6 +1171,13 @@ func (e *workflowExecutor) emitNodeResult(
 	if result == nil {
 		return
 	}
+	if result.Data == nil {
+		result.Data = make(map[string]interface{})
+	}
+	result.Data["node_name"] = node.Name
+	result.Data["node_type"] = node.Type
+	result.Data["is_workflow"] = true
+
 	if err := e.eventBus.Emit(e.ctx, event.Event{
 		ID:        callID + "-result",
 		Type:      event.EventAgentToolResult,
@@ -1246,4 +1343,27 @@ func appendWorkflowArtifactLinks(answer string, artifacts types.MessageArtifacts
 		b.WriteString(")\n")
 	}
 	return b.String()
+}
+
+// splitAnswerIntoStreamChunks 按 unicode rune 切分整块答案，用于非 LLM 直出场景下的平滑流式推送。
+func splitAnswerIntoStreamChunks(text string, chunkSize int) []string {
+	if text == "" {
+		return nil
+	}
+	if chunkSize <= 0 {
+		chunkSize = 20
+	}
+	runes := []rune(text)
+	if len(runes) <= chunkSize {
+		return []string{text}
+	}
+	var chunks []string
+	for i := 0; i < len(runes); i += chunkSize {
+		end := i + chunkSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[i:end]))
+	}
+	return chunks
 }

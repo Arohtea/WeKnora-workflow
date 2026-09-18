@@ -58,5 +58,8 @@ export function getAgentToolIconName(
   if (toolName === 'execute_skill_script') {
     return 'code'
   }
+  if (toolName.startsWith('workflow.')) {
+    return 'fork'
+  }
   return 'file-paste'
 }

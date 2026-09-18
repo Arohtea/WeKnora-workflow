@@ -211,6 +211,20 @@ func (h *AgentStreamHandler) handleToolCall(ctx context.Context, evt event.Event
 		"arguments":    agenttools.SanitizeSandboxFileCallArgs(data.ToolName, data.Arguments),
 		"tool_call_id": data.ToolCallID,
 	}
+	if data.Hint != "" {
+		metadata["hint"] = data.Hint
+	}
+	if data.Arguments != nil {
+		if nodeName, ok := data.Arguments["node_name"].(string); ok && nodeName != "" {
+			metadata["node_name"] = nodeName
+		}
+		if nodeType, ok := data.Arguments["node_type"].(string); ok && nodeType != "" {
+			metadata["node_type"] = nodeType
+		}
+		if isWorkflow, ok := data.Arguments["is_workflow"].(bool); ok && isWorkflow {
+			metadata["is_workflow"] = true
+		}
+	}
 
 	// Append event to stream
 	if err := h.streamManager.AppendEvent(h.ctx, h.sessionID, h.assistantMessageID, interfaces.StreamEvent{
@@ -273,6 +287,17 @@ func (h *AgentStreamHandler) handleToolResult(ctx context.Context, evt event.Eve
 	})
 	for k, v := range clientData {
 		metadata[k] = v
+	}
+	if data.Data != nil {
+		if nodeName, ok := data.Data["node_name"].(string); ok && nodeName != "" {
+			metadata["node_name"] = nodeName
+		}
+		if nodeType, ok := data.Data["node_type"].(string); ok && nodeType != "" {
+			metadata["node_type"] = nodeType
+		}
+		if isWorkflow, ok := data.Data["is_workflow"].(bool); ok && isWorkflow {
+			metadata["is_workflow"] = true
+		}
 	}
 
 	// Append event to stream
