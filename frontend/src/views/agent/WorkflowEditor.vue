@@ -1,44 +1,99 @@
 <template>
   <div class="workflow-editor">
     <div class="workflow-toolbar">
-      <div>
-        <h3 class="workflow-title">流程编排</h3>
-        <p class="workflow-subtitle">把用户的问题按固定步骤处理：先检索或调用工具，再由模型组织最终回复。</p>
+      <div class="workflow-toolbar-left">
+        <div class="workflow-toolbar-title-wrap">
+          <h3 class="workflow-title">流程编排</h3>
+          <span class="workflow-stats-badge">{{ flowNodes.length }} 节点 · {{ flowEdges.length }} 连线</span>
+        </div>
+        <p class="workflow-subtitle">按照预定流程序列处理提问，结合知识库检索、模型推理与外部工具输出精准回答。</p>
       </div>
       <div class="workflow-toolbar-actions">
-        <button type="button" class="workflow-icon-button" title="适应画布" :disabled="disabled" @click="fitCanvas">
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--icon"
+          title="撤回 (Ctrl+Z / ⌘Z)"
+          :disabled="disabled || !canUndo"
+          @click="undo"
+        >
+          <t-icon name="rollback" />
+        </button>
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--icon"
+          title="重做 (Ctrl+Shift+Z / ⌘Shift+Z / Ctrl+Y)"
+          :disabled="disabled || !canRedo"
+          @click="redo"
+        >
+          <t-icon name="rollback" style="transform: scaleX(-1);" />
+        </button>
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--icon"
+          title="适应画布视野"
+          :disabled="disabled"
+          @click="fitCanvas"
+        >
           <t-icon name="fullscreen-1" />
         </button>
         <button
           type="button"
-          class="workflow-toolbar-button"
+          class="workflow-toolbar-btn"
+          :class="{ 'is-active': showTemplateGallery }"
           :disabled="disabled"
           :title="showTemplateGallery ? '返回画布' : '用现成模板替换当前流程'"
           @click="toggleTemplateGallery"
         >
           <t-icon name="view-module" />
-          {{ showTemplateGallery ? '返回画布' : '模板' }}
+          <span>{{ showTemplateGallery ? '返回画布' : '模板库' }}</span>
         </button>
-        <button type="button" class="workflow-toolbar-button" :disabled="disabled" @click="validateDefinition">
+        <button
+          type="button"
+          class="workflow-toolbar-btn"
+          :class="{ 'is-active': showOnboardingGuide }"
+          title="切换编排指南"
+          @click="showOnboardingGuide = !showOnboardingGuide"
+        >
+          <t-icon name="help-circle" />
+          <span>指南</span>
+        </button>
+        <button
+          type="button"
+          class="workflow-toolbar-btn"
+          :disabled="disabled"
+          @click="validateDefinition"
+        >
           <t-icon name="check-circle" />
-          校验
+          <span>校验</span>
         </button>
-        <button type="button" class="workflow-toolbar-button" :disabled="disabled" @click="emit('run')">
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--primary"
+          :disabled="disabled"
+          @click="emit('run')"
+        >
           <t-icon name="play-circle" />
-          保存并去试用
+          <span>保存并试用</span>
         </button>
       </div>
     </div>
 
-    <div class="workflow-onboarding" aria-label="工作流编排步骤">
-      <div v-for="(step, index) in onboardingSteps" :key="step.title" class="workflow-onboarding-step">
-        <span class="workflow-onboarding-index">{{ index + 1 }}</span>
-        <span>
-          <strong>{{ step.title }}</strong>
-          <small>{{ step.description }}</small>
-        </span>
+    <transition name="fade">
+      <div v-if="showOnboardingGuide" class="workflow-onboarding" aria-label="工作流编排步骤">
+        <div class="workflow-onboarding-grid">
+          <div v-for="(step, index) in onboardingSteps" :key="step.title" class="workflow-onboarding-step">
+            <span class="workflow-onboarding-index">{{ index + 1 }}</span>
+            <div class="workflow-onboarding-content">
+              <strong>{{ step.title }}</strong>
+              <small>{{ step.description }}</small>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="workflow-onboarding-close" title="收起指南" @click="showOnboardingGuide = false">
+          <t-icon name="close" size="14px" />
+        </button>
       </div>
-    </div>
+    </transition>
 
     <div v-if="showTemplateGallery" class="workflow-templates" data-guide="workflow-templates">
       <div class="workflow-templates-header">
@@ -96,29 +151,35 @@
 
     <div v-else class="workflow-layout">
       <aside class="workflow-palette" aria-label="节点面板" data-guide="workflow-palette">
-        <div class="workflow-panel-heading">添加步骤</div>
-        <p class="workflow-panel-hint">点击即可加入画布，再把它和前后步骤连起来。</p>
-        <button
-          v-for="item in nodePalette"
-          :key="item.type"
-          type="button"
-          class="workflow-palette-item"
-          :class="`workflow-palette-item--${item.type}`"
-          :disabled="disabled || (item.type === 'start' && hasStartNode)"
-          draggable="true"
-          @click="addNode(item.type)"
-          @dragstart="onPaletteDragStart($event, item.type)"
-        >
-          <span class="workflow-palette-icon"><t-icon :name="item.icon" /></span>
-          <span>
-            <strong>{{ item.label }}</strong>
-            <small>{{ item.description }}</small>
-          </span>
-        </button>
+        <div class="workflow-panel-header">
+          <div class="workflow-panel-heading">节点组件</div>
+          <p class="workflow-panel-hint">点击或拖拽节点至右侧画布连线</p>
+        </div>
+        <div class="workflow-palette-list">
+          <button
+            v-for="item in nodePalette"
+            :key="item.type"
+            type="button"
+            class="workflow-palette-item"
+            :class="`workflow-palette-item--${item.type}`"
+            :disabled="disabled || (item.type === 'start' && hasStartNode)"
+            draggable="true"
+            @click="addNode(item.type)"
+            @dragstart="onPaletteDragStart($event, item.type)"
+          >
+            <div class="workflow-palette-icon">
+              <t-icon :name="item.icon" />
+            </div>
+            <div class="workflow-palette-info">
+              <strong>{{ item.label }}</strong>
+              <small>{{ item.description }}</small>
+            </div>
+          </button>
+        </div>
 
         <div class="workflow-legend">
-          <span class="workflow-legend-dot workflow-legend-dot--start" /> 开始
-          <span class="workflow-legend-dot workflow-legend-dot--end" /> 结束
+          <span class="workflow-legend-item"><span class="workflow-legend-dot workflow-legend-dot--start" /> 入口节点</span>
+          <span class="workflow-legend-item"><span class="workflow-legend-dot workflow-legend-dot--end" /> 回复节点</span>
         </div>
       </aside>
 
@@ -132,18 +193,75 @@
         <VueFlow
           v-model:nodes="flowNodes"
           v-model:edges="flowEdges"
+          :connection-mode="ConnectionMode.Loose"
+          :connection-radius="30"
+          :is-valid-connection="isValidConnection"
           :nodes-draggable="!disabled"
           :nodes-connectable="!disabled"
           :elements-selectable="true"
           :default-viewport="viewport"
           :fit-view-on-init="false"
-          :default-edge-options="{ type: 'smoothstep', animated: false }"
+          :default-edge-options="{ type: 'smoothstep', animated: false, markerEnd: MarkerType.ArrowClosed }"
           @connect="onConnect"
           @node-click="onNodeClick"
+          @node-drag-stop="onNodeDragStop"
           @edge-click="onEdgeClick"
           @pane-click="clearSelection"
           @move-end="onMoveEnd"
         >
+          <template #node-default="{ id, data, selected }">
+            <div
+              class="workflow-node-card"
+              :class="[
+                `workflow-node-card--${data.workflowType}`,
+                { 'is-selected': selected }
+              ]"
+            >
+              <!-- 上、右、下、左 四向连接桩 Handle -->
+              <Handle
+                id="top"
+                :type="data.workflowType === 'end' ? 'target' : 'source'"
+                :position="Position.Top"
+                :connectable-start="!disabled && data.workflowType !== 'end'"
+                :connectable-end="!disabled && data.workflowType !== 'start'"
+                class="workflow-node-handle workflow-node-handle--top"
+              />
+              <Handle
+                id="right"
+                :type="data.workflowType === 'end' ? 'target' : 'source'"
+                :position="Position.Right"
+                :connectable-start="!disabled && data.workflowType !== 'end'"
+                :connectable-end="!disabled && data.workflowType !== 'start'"
+                class="workflow-node-handle workflow-node-handle--right"
+              />
+              <Handle
+                id="bottom"
+                :type="data.workflowType === 'end' ? 'target' : 'source'"
+                :position="Position.Bottom"
+                :connectable-start="!disabled && data.workflowType !== 'end'"
+                :connectable-end="!disabled && data.workflowType !== 'start'"
+                class="workflow-node-handle workflow-node-handle--bottom"
+              />
+              <Handle
+                id="left"
+                :type="data.workflowType === 'end' ? 'target' : 'source'"
+                :position="Position.Left"
+                :connectable-start="!disabled && data.workflowType !== 'end'"
+                :connectable-end="!disabled && data.workflowType !== 'start'"
+                class="workflow-node-handle workflow-node-handle--left"
+              />
+              <div class="workflow-node-stripe" />
+              <div class="workflow-node-body">
+                <div class="workflow-node-icon-badge">
+                  <t-icon :name="nodeTypeIcon(data.workflowType)" />
+                </div>
+                <div class="workflow-node-text-wrap">
+                  <div class="workflow-node-name" :title="data.name">{{ data.name }}</div>
+                  <div class="workflow-node-snippet">{{ getNodeSnippet(data) }}</div>
+                </div>
+              </div>
+            </div>
+          </template>
           <Background pattern-color="#cbd5e1" :gap="20" />
           <Controls position="bottom-left" />
           <MiniMap position="bottom-right" />
@@ -162,424 +280,611 @@
       <aside class="workflow-inspector" data-guide="workflow-inspector">
         <template v-if="selectedNode">
           <div class="workflow-inspector-header">
-            <div>
-              <span class="workflow-inspector-kicker">节点属性</span>
-              <h3>{{ selectedNode.data.name }}</h3>
-              <button
-                type="button"
-                class="workflow-node-id"
-                :title="`引用这个节点的输出时会用到：nodes.${selectedNode.id}`"
-                @click="copyNodeVariable(selectedNode.id)"
-              >
-                nodes.{{ selectedNode.id }}
-                <t-icon name="copy" size="12px" />
-              </button>
+            <div class="workflow-inspector-header-left">
+              <div class="workflow-node-type-pill" :class="`workflow-node-type-pill--${selectedNode.data.workflowType}`">
+                <t-icon :name="nodeTypeIcon(selectedNode.data.workflowType)" size="14px" />
+                <span>{{ nodeTypeLabel(selectedNode.data.workflowType) }}</span>
+              </div>
+              <h3 class="workflow-inspector-title">{{ selectedNode.data.name }}</h3>
+              <div class="workflow-node-id-row">
+                <button
+                  type="button"
+                  class="workflow-node-id-chip"
+                  title="点击复制下游引用变量"
+                  @click="copyNodeVariable(selectedNode.id)"
+                >
+                  <t-icon name="code" size="12px" />
+                  <code>nodes.{{ selectedNode.id }}</code>
+                  <t-icon name="copy" size="12px" class="workflow-copy-icon" />
+                </button>
+              </div>
             </div>
             <button
               v-if="!disabled && selectedNode.data.workflowType !== 'start'"
               type="button"
-              class="workflow-icon-button workflow-icon-button--danger"
-              title="删除节点"
+              class="workflow-toolbar-btn workflow-toolbar-btn--icon workflow-toolbar-btn--danger"
+              title="删除此节点"
               @click="removeSelectedNode"
             >
               <t-icon name="delete" />
             </button>
           </div>
 
-          <label class="workflow-field">
-            <span>节点名称</span>
-            <input :value="selectedNode.data.name" :disabled="disabled" @input="updateNodeName(inputValue($event))" />
-            <small>名称只影响画布显示，方便你和同事看懂每一步在做什么。</small>
-          </label>
-
-          <div class="workflow-node-type-badge" :class="`workflow-node-type-badge--${selectedNode.data.workflowType}`">
-            {{ nodeTypeLabel(selectedNode.data.workflowType) }}
-          </div>
-
-          <div class="workflow-node-help">
-            <div>
-              <strong>必填项</strong>
-              <span>{{ selectedNodeHelp.required }}</span>
-            </div>
-            <div>
-              <strong>变量示例</strong>
-              <code>{{ selectedNodeHelp.variables }}</code>
-            </div>
-            <div>
-              <strong>输出说明</strong>
-              <span>{{ selectedNodeHelp.output }}</span>
-            </div>
-          </div>
-
-          <template v-if="selectedNode.data.workflowType === 'knowledge-retrieval'">
-            <div v-if="knowledgeBaseOptions.length === 0" class="workflow-resource-empty">
-              <t-icon name="folder" />
-              <strong>暂无可用知识库</strong>
-              <span>当前空间没有可选知识库，请先创建或获取知识库权限。</span>
-              <button type="button" class="workflow-link-button" @click="emit('manage-knowledge-bases')">
-                配置知识库
-              </button>
-            </div>
-            <label v-else class="workflow-field">
-              <span>知识库 *</span>
-              <select
-                multiple
-                :value="retrievalKnowledgeBaseIDs"
-                :disabled="disabled"
-                @change="updateRetrievalKnowledgeBases(selectedValues($event))"
-              >
-                <option v-for="kb in knowledgeBaseOptions" :key="kb.value" :value="kb.value">{{ kb.label }}</option>
-              </select>
-              <small>可按住 Ctrl 或 Command 多选。</small>
-              <small v-if="missingRetrievalKnowledgeBaseIDs.length" class="workflow-field-error">
-                以下知识库已不可用：{{ missingRetrievalKnowledgeBaseIDs.join(', ') }}
-              </small>
-            </label>
+          <!-- 基础信息 -->
+          <div class="workflow-inspector-section">
             <label class="workflow-field">
-              <span>查询模板 *</span>
-              <textarea
-                :value="configString('query_template')"
-                :disabled="disabled"
-                rows="3"
-                placeholder="{{input.query}}"
-                @input="updateConfig('query_template', inputValue($event))"
-              />
-            </label>
-            <label class="workflow-field workflow-field--inline">
-              <span>召回数量 *</span>
+              <span class="workflow-field-label">节点显示名称</span>
               <input
-                type="number"
-                min="1"
-                max="50"
-                :value="configNumber('top_k', 5)"
+                :value="selectedNode.data.name"
                 :disabled="disabled"
-                @input="updateConfig('top_k', numberValue($event, 5))"
+                class="workflow-input"
+                placeholder="给步骤起一个清晰的名称..."
+                @input="updateNodeName(inputValue($event))"
               />
+              <small class="workflow-field-help">用于在画布中直观区分步骤，便于理解与协作。</small>
             </label>
-          </template>
+          </div>
 
-          <template v-else-if="selectedNode.data.workflowType === 'llm'">
-            <label class="workflow-field">
-              <span>系统提示词</span>
-              <textarea
-                :value="configString('system_prompt')"
-                :disabled="disabled"
-                rows="3"
-                placeholder="你是一个严谨高效的文本处理助手。"
-                @input="updateConfig('system_prompt', inputValue($event))"
-              />
-              <small>可选，用于设定模型的身份、角色与风格。</small>
-            </label>
-            <label class="workflow-field">
-              <span>用户提示词 *</span>
-              <textarea
-                :value="configString('prompt')"
-                :disabled="disabled"
-                rows="6"
-                placeholder="请根据 {{input.query}} 进行改写或总结..."
-                @input="updateConfig('prompt', inputValue($event))"
-              />
-              <small>支持使用 &#123;&#123;input.query&#125;&#125; 等插值变量；模型生成的文本可通过 nodes.{{ selectedNode.id }}.text 供下游引用。</small>
-            </label>
-            <div style="display: flex; gap: 12px;">
-              <label class="workflow-field workflow-field--inline" style="flex: 1;">
-                <span>温度 (0-2)</span>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="2"
-                  :value="configNumber('temperature', 0.7)"
+          <!-- 知识库检索节点 -->
+          <template v-if="selectedNode.data.workflowType === 'knowledge-retrieval'">
+            <div class="workflow-inspector-section">
+              <div class="workflow-section-title">检索配置</div>
+              <div v-if="knowledgeBaseOptions.length === 0" class="workflow-resource-empty">
+                <t-icon name="folder" size="20px" />
+                <strong>暂无可用知识库</strong>
+                <span>当前空间没有可选知识库，请先创建或获取知识库权限。</span>
+                <button type="button" class="workflow-link-button" @click="emit('manage-knowledge-bases')">
+                  配置知识库
+                </button>
+              </div>
+              <div v-else class="workflow-field">
+                <span class="workflow-field-label">关联知识库 <em class="workflow-required">*</em></span>
+                <t-select
+                  :value="retrievalKnowledgeBaseIDs"
+                  multiple
+                  filterable
+                  placeholder="选择要检索的知识库..."
                   :disabled="disabled"
-                  @input="updateConfig('temperature', numberValue($event, 0.7))"
+                  :min-collapsed-num="3"
+                  @change="onKnowledgeBasesChange"
+                >
+                  <t-option
+                    v-for="kb in knowledgeBaseOptions"
+                    :key="kb.value"
+                    :value="kb.value"
+                    :label="kb.label"
+                  />
+                </t-select>
+                <small class="workflow-field-help">支持多选，模型将综合检索命中内容作为上下文依据。</small>
+                <div v-if="missingRetrievalKnowledgeBaseIDs.length" class="workflow-field-alert workflow-field-alert--error">
+                  <t-icon name="error-circle" />
+                  <span>以下知识库已不可用：{{ missingRetrievalKnowledgeBaseIDs.join(', ') }}</span>
+                </div>
+              </div>
+
+              <div class="workflow-field">
+                <span class="workflow-field-label">查询模板 <em class="workflow-required">*</em></span>
+                <textarea
+                  :value="configString('query_template')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="3"
+                  placeholder="{{input.query}}"
+                  @input="updateConfig('query_template', inputValue($event))"
                 />
-              </label>
-              <label class="workflow-field workflow-field--inline" style="flex: 1;">
-                <span>最大 Token</span>
+                <small class="workflow-field-help">默认使用提问变量 <code>&#123;&#123;input.query&#125;&#125;</code>，也可拼接上下文。</small>
+              </div>
+
+              <div class="workflow-field workflow-field--inline">
+                <span class="workflow-field-label">召回数量 (Top-K) <em class="workflow-required">*</em></span>
                 <input
                   type="number"
                   min="1"
-                  placeholder="默认不限"
-                  :value="configNullableNumber('max_tokens')"
+                  max="50"
+                  class="workflow-input"
+                  style="width: 110px;"
+                  :value="configNumber('top_k', 5)"
                   :disabled="disabled"
-                  @input="updateConfig('max_tokens', nullableNumberValue($event))"
+                  @input="updateConfig('top_k', numberValue($event, 5))"
                 />
-              </label>
-            </div>
-          </template>
-
-          <template v-else-if="selectedNode.data.workflowType === 'llm-decision'">
-            <label class="workflow-field">
-              <span>判断提示词 *</span>
-              <textarea
-                :value="configString('prompt')"
-                :disabled="disabled"
-                rows="7"
-                placeholder="根据 {{input.query}} 返回一个候选标签"
-                @input="updateConfig('prompt', inputValue($event))"
-              />
-            </label>
-            <label class="workflow-field">
-              <span>候选标签 *</span>
-              <textarea
-                :value="decisionChoicesText"
-                :disabled="disabled"
-                rows="4"
-                placeholder="通过&#10;拒绝"
-                @input="updateDecisionChoices(inputValue($event))"
-              />
-              <small>每行一个标签，输出可通过 nodes.节点ID.data.choice 引用。</small>
-            </label>
-          </template>
-
-          <template v-else-if="selectedNode.data.workflowType === 'http-request'">
-            <label class="workflow-field workflow-field--inline">
-              <span>请求方法 *</span>
-              <select :value="configString('method', 'GET')" :disabled="disabled" @change="updateConfig('method', inputValue($event))">
-                <option v-for="method in httpMethods" :key="method" :value="method">{{ method }}</option>
-              </select>
-            </label>
-            <label class="workflow-field">
-              <span>URL *</span>
-              <input
-                :value="configString('url')"
-                :disabled="disabled"
-                placeholder="https://example.com/api/submit"
-                @input="updateConfig('url', inputValue($event))"
-              />
-              <small>{{ urlFieldHint }}</small>
-            </label>
-            <label class="workflow-field">
-              <span>请求头 JSON</span>
-              <textarea
-                :value="httpHeadersText"
-                :disabled="disabled"
-                rows="4"
-                placeholder='{"Content-Type":"application/json"}'
-                @input="updateHttpHeaders(inputValue($event))"
-              />
-              <small v-if="jsonFieldErrors.headers" class="workflow-field-error">{{ jsonFieldErrors.headers }}</small>
-              <small v-else class="workflow-field-warning">
-                为了安全，这里不能填 Authorization、Cookie、API Key 等认证头。需要带密钥调用接口时，请改用 MCP 工具接入。
-              </small>
-            </label>
-            <label class="workflow-field">
-              <span>请求体模板</span>
-              <textarea
-                :value="configString('body_template')"
-                :disabled="disabled"
-                rows="5"
-                placeholder='{"query":"{{input.query}}"}'
-                @input="updateConfig('body_template', inputValue($event))"
-              />
-            </label>
-          </template>
-
-          <template v-else-if="selectedNode.data.workflowType === 'tool'">
-            <label class="workflow-field">
-              <span>工具类型 *</span>
-              <select :value="configString('kind', 'builtin')" :disabled="disabled" @change="changeToolKind(inputValue($event))">
-                <option value="builtin">内置工具</option>
-                <option value="mcp">MCP 工具</option>
-                <option value="skill">Skill</option>
-              </select>
-            </label>
-
-            <div v-if="toolKind === 'builtin' && builtinTools.length === 0" class="workflow-resource-empty">
-              <t-icon name="tools" />
-              <strong>暂无可用内置工具</strong>
-              <span>当前部署没有可用于工作流的内置工具。</span>
-            </div>
-            <label v-else-if="toolKind === 'builtin'" class="workflow-field">
-              <span>内置工具 *</span>
-              <select :value="configString('tool_name')" :disabled="disabled" @change="updateConfig('tool_name', inputValue($event))">
-                <option value="">请选择内置工具</option>
-                <option v-if="configString('tool_name') && !selectedBuiltinTool" :value="configString('tool_name')" disabled>
-                  已失效：{{ configString('tool_name') }}
-                </option>
-                <option v-for="tool in builtinTools" :key="tool.name" :value="tool.name">
-                  {{ tool.display_name || tool.name }}
-                </option>
-              </select>
-              <small v-if="selectedBuiltinTool?.description">{{ selectedBuiltinTool.description }}</small>
-            </label>
-
-            <template v-else-if="toolKind === 'mcp'">
-              <div v-if="mcpServices.length === 0" class="workflow-resource-empty">
-                <t-icon name="server" />
-                <strong>暂无可用 MCP 服务</strong>
-                <span>当前空间没有已启用的 MCP 服务，请先完成配置。</span>
-                <button type="button" class="workflow-link-button" @click="emit('manage-mcp')">
-                  管理 MCP
-                </button>
               </div>
-              <label v-else class="workflow-field">
-                <span>MCP 服务 *</span>
-                <select :value="configString('service_id')" :disabled="disabled" @change="changeMCPService(inputValue($event))">
-                  <option value="">请选择 MCP 服务</option>
-                  <option v-if="configString('service_id') && !selectedMCPService" :value="configString('service_id')" disabled>
-                    已失效：{{ configString('service_id') }}
-                  </option>
-                  <option v-for="service in mcpServices" :key="service.id" :value="service.id">{{ service.name }}</option>
-                </select>
-              </label>
-              <label v-if="selectedMCPService" class="workflow-field">
-                <span>MCP 工具 *</span>
-                <select :value="configString('tool_name')" :disabled="disabled" @change="updateConfig('tool_name', inputValue($event))">
-                  <option value="">请选择 MCP 工具</option>
-                  <option v-if="configString('tool_name') && !selectedMCPTool" :value="configString('tool_name')" disabled>
-                    已失效：{{ configString('tool_name') }}
-                  </option>
-                  <option v-for="tool in selectedMCPService?.tools || []" :key="tool.name" :value="tool.name">
-                    {{ tool.display_name || tool.name }}
-                  </option>
-                </select>
-                <small v-if="selectedMCPTool?.description">{{ selectedMCPTool.description }}</small>
-                <small v-else-if="selectedMCPService.tools.length === 0" class="workflow-field-error">
-                  该服务没有可用工具，请检查服务配置。
+            </div>
+          </template>
+
+          <!-- 大模型处理（LLM）节点 -->
+          <template v-else-if="selectedNode.data.workflowType === 'llm'">
+            <div class="workflow-inspector-section">
+              <div class="workflow-section-title">模型推理设置</div>
+              <div class="workflow-field">
+                <span class="workflow-field-label">系统提示词 (System Prompt)</span>
+                <textarea
+                  :value="configString('system_prompt')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="3"
+                  placeholder="设定模型的角色与行为准则，例如：你是一个严谨高效的文本处理专家..."
+                  @input="updateConfig('system_prompt', inputValue($event))"
+                />
+                <small class="workflow-field-help">可选，用于定义大模型的全局角色、专业视角与输出规范。</small>
+              </div>
+
+              <div class="workflow-field">
+                <span class="workflow-field-label">用户提示词 (User Prompt) <em class="workflow-required">*</em></span>
+                <textarea
+                  :value="configString('prompt')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="6"
+                  placeholder="请根据 {{input.query}} 进行改写或总结..."
+                  @input="updateConfig('prompt', inputValue($event))"
+                />
+                <small class="workflow-field-help">
+                  支持使用 <code>&#123;&#123;input.query&#125;&#125;</code> 或 <code>&#123;&#123;nodes.节点ID.xxx&#125;&#125;</code>；生成文本可通过 <code>nodes.{{ selectedNode.id }}.text</code> 供下游引用。
                 </small>
-              </label>
-            </template>
+              </div>
 
-            <label v-else class="workflow-field">
-              <span>Skill *</span>
-              <select :value="configString('skill_name')" :disabled="disabled || !sandboxConfigId || skills.length === 0" @change="updateConfig('skill_name', inputValue($event))">
-                <option value="">请选择 Skill</option>
-                <option v-if="configString('skill_name') && !selectedSkill" :value="configString('skill_name')" disabled>
-                  已失效：{{ configString('skill_name') }}
-                </option>
-                <option v-for="skill in skills" :key="skill.name" :value="skill.name">{{ skillOptionLabel(skill) }}</option>
-              </select>
-              <small v-if="selectedSkill?.description">{{ selectedSkill.description }}</small>
-            </label>
-
-            <div v-if="toolKind === 'skill' && !sandboxConfigId" class="workflow-resource-empty">
-              <t-icon name="server" />
-              <strong>尚未选择运行沙箱</strong>
-              <span>Skill 只能从当前运行沙箱的已安装可用列表中选择。</span>
-              <button type="button" class="workflow-link-button" @click="emit('select-sandbox')">
-                选择运行沙箱
-              </button>
+              <div class="workflow-field-grid">
+                <div class="workflow-field">
+                  <span class="workflow-field-label">采样温度 (0-2)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="2"
+                    class="workflow-input"
+                    :value="configNumber('temperature', 0.7)"
+                    :disabled="disabled"
+                    @input="updateConfig('temperature', numberValue($event, 0.7))"
+                  />
+                  <small class="workflow-field-help">数值越低越确定，越高越具发散性。</small>
+                </div>
+                <div class="workflow-field">
+                  <span class="workflow-field-label">最大 Token</span>
+                  <input
+                    type="number"
+                    min="1"
+                    class="workflow-input"
+                    placeholder="默认不限"
+                    :value="configNullableNumber('max_tokens')"
+                    :disabled="disabled"
+                    @input="updateConfig('max_tokens', nullableNumberValue($event))"
+                  />
+                  <small class="workflow-field-help">留空表示使用模型默认限制。</small>
+                </div>
+              </div>
             </div>
-            <div v-else-if="toolKind === 'skill' && skills.length === 0" class="workflow-resource-empty">
-              <t-icon name="tools" />
-              <strong>当前沙箱没有可用 Skill</strong>
-              <span>请安装并启用 Skill，等待状态变为就绪后再选择。</span>
-              <button type="button" class="workflow-link-button" @click="emit('manage-skills')">
-                管理技能
-              </button>
-            </div>
-
-            <label v-if="toolKind !== 'skill'" class="workflow-field">
-              <span>参数 JSON</span>
-              <textarea
-                :value="toolArgumentsText"
-                :disabled="disabled"
-                rows="7"
-                :placeholder="toolArgumentPlaceholder"
-                @input="updateToolArguments(inputValue($event))"
-              />
-              <small v-if="jsonFieldErrors.arguments" class="workflow-field-error">{{ jsonFieldErrors.arguments }}</small>
-              <small v-else-if="toolArgumentFields.length">
-                这个工具需要的参数：<code v-for="field in toolArgumentFields" :key="field.name">{{ field.label }}</code>
-              </small>
-              <small v-else>
-                {{ toolArgumentHint }}
-              </small>
-            </label>
-            <label v-else class="workflow-field">
-              <span>任务模板 *</span>
-              <textarea
-                :value="configString('task_template')"
-                :disabled="disabled"
-                rows="7"
-                placeholder="请根据 {{input.query}} 完成任务，并返回可交付结果。"
-                @input="updateConfig('task_template', inputValue($event))"
-              />
-            </label>
           </template>
 
+          <!-- 大模型决策节点 -->
+          <template v-else-if="selectedNode.data.workflowType === 'llm-decision'">
+            <div class="workflow-inspector-section">
+              <div class="workflow-section-title">分支判断设置</div>
+              <div class="workflow-field">
+                <span class="workflow-field-label">判断提示词 <em class="workflow-required">*</em></span>
+                <textarea
+                  :value="configString('prompt')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="6"
+                  placeholder="请根据 {{input.query}} 判断意图并返回以下候选之一..."
+                  @input="updateConfig('prompt', inputValue($event))"
+                />
+              </div>
+              <div class="workflow-field">
+                <span class="workflow-field-label">候选分支标签 <em class="workflow-required">*</em></span>
+                <textarea
+                  :value="decisionChoicesText"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="4"
+                  placeholder="通过&#10;拒绝"
+                  @input="updateDecisionChoices(inputValue($event))"
+                />
+                <small class="workflow-field-help">每行一个候选分支标签；决策输出可通过 <code>nodes.{{ selectedNode.id }}.data.choice</code> 配合连线条件实现分支路由。</small>
+              </div>
+            </div>
+          </template>
+
+          <!-- HTTP 请求节点 -->
+          <template v-else-if="selectedNode.data.workflowType === 'http-request'">
+            <div class="workflow-inspector-section">
+              <div class="workflow-section-title">HTTP 接口请求</div>
+              <div class="workflow-field-grid">
+                <div class="workflow-field" style="max-width: 120px;">
+                  <span class="workflow-field-label">请求方法 <em class="workflow-required">*</em></span>
+                  <t-select
+                    :value="configString('method', 'GET')"
+                    :disabled="disabled"
+                    @change="updateConfig('method', String($event || 'GET'))"
+                  >
+                    <t-option v-for="method in httpMethods" :key="method" :value="method" :label="method" />
+                  </t-select>
+                </div>
+                <div class="workflow-field" style="flex: 1;">
+                  <span class="workflow-field-label">接口 URL <em class="workflow-required">*</em></span>
+                  <input
+                    :value="configString('url')"
+                    :disabled="disabled"
+                    class="workflow-input"
+                    placeholder="https://api.example.com/endpoint"
+                    @input="updateConfig('url', inputValue($event))"
+                  />
+                </div>
+              </div>
+              <small class="workflow-field-help" style="margin-top: -6px; margin-bottom: 12px; display: block;">{{ urlFieldHint }}</small>
+
+              <div class="workflow-field">
+                <span class="workflow-field-label">请求头 JSON (Headers)</span>
+                <textarea
+                  :value="httpHeadersText"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="4"
+                  placeholder='{"Content-Type":"application/json"}'
+                  @input="updateHttpHeaders(inputValue($event))"
+                />
+                <div v-if="jsonFieldErrors.headers" class="workflow-field-alert workflow-field-alert--error">
+                  <t-icon name="error-circle" />
+                  <span>{{ jsonFieldErrors.headers }}</span>
+                </div>
+                <div v-else class="workflow-field-alert workflow-field-alert--info">
+                  <t-icon name="info-circle" />
+                  <span>出于安全考虑，不可直接配置 Authorization/Cookie 头。若需鉴权调用，请使用 MCP 服务接入。</span>
+                </div>
+              </div>
+
+              <div class="workflow-field">
+                <span class="workflow-field-label">请求体模板 (Body)</span>
+                <textarea
+                  :value="configString('body_template')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="4"
+                  placeholder='{"query":"{{input.query}}"}'
+                  @input="updateConfig('body_template', inputValue($event))"
+                />
+              </div>
+            </div>
+          </template>
+
+          <!-- 工具调用节点 -->
+          <template v-else-if="selectedNode.data.workflowType === 'tool'">
+            <div class="workflow-inspector-section">
+              <div class="workflow-section-title">外部工具接入</div>
+              <div class="workflow-field">
+                <span class="workflow-field-label">工具类型 <em class="workflow-required">*</em></span>
+                <t-radio-group
+                  :value="configString('kind', 'builtin')"
+                  :disabled="disabled"
+                  variant="default-filled"
+                  size="small"
+                  @change="changeToolKind(String($event))"
+                >
+                  <t-radio-button value="builtin">内置工具</t-radio-button>
+                  <t-radio-button value="mcp">MCP 服务</t-radio-button>
+                  <t-radio-button value="skill">沙箱技能</t-radio-button>
+                </t-radio-group>
+              </div>
+
+              <div v-if="toolKind === 'builtin' && builtinTools.length === 0" class="workflow-resource-empty">
+                <t-icon name="tools" size="20px" />
+                <strong>暂无可用内置工具</strong>
+                <span>当前环境未发现可用于工作流的内置工具。</span>
+              </div>
+              <div v-else-if="toolKind === 'builtin'" class="workflow-field">
+                <span class="workflow-field-label">选择内置工具 <em class="workflow-required">*</em></span>
+                <t-select
+                  :value="configString('tool_name')"
+                  :disabled="disabled"
+                  placeholder="请选择内置工具..."
+                  filterable
+                  @change="updateConfig('tool_name', String($event || ''))"
+                >
+                  <t-option
+                    v-for="tool in builtinTools"
+                    :key="tool.name"
+                    :value="tool.name"
+                    :label="tool.display_name || tool.name"
+                  />
+                </t-select>
+                <small v-if="selectedBuiltinTool?.description" class="workflow-field-help">{{ selectedBuiltinTool.description }}</small>
+              </div>
+
+              <template v-else-if="toolKind === 'mcp'">
+                <div v-if="mcpServices.length === 0" class="workflow-resource-empty">
+                  <t-icon name="server" size="20px" />
+                  <strong>暂无可用 MCP 服务</strong>
+                  <span>当前空间没有已启用的 MCP 服务，请先配置连接。</span>
+                  <button type="button" class="workflow-link-button" @click="emit('manage-mcp')">
+                    管理 MCP
+                  </button>
+                </div>
+                <template v-else>
+                  <div class="workflow-field">
+                    <span class="workflow-field-label">MCP 服务 <em class="workflow-required">*</em></span>
+                    <t-select
+                      :value="configString('service_id')"
+                      :disabled="disabled"
+                      placeholder="请选择 MCP 服务..."
+                      filterable
+                      @change="changeMCPService(String($event || ''))"
+                    >
+                      <t-option
+                        v-for="service in mcpServices"
+                        :key="service.id"
+                        :value="service.id"
+                        :label="service.name"
+                      />
+                    </t-select>
+                  </div>
+                  <div v-if="selectedMCPService" class="workflow-field">
+                    <span class="workflow-field-label">MCP 工具 <em class="workflow-required">*</em></span>
+                    <t-select
+                      :value="configString('tool_name')"
+                      :disabled="disabled"
+                      placeholder="请选择 MCP 工具..."
+                      filterable
+                      @change="updateConfig('tool_name', String($event || ''))"
+                    >
+                      <t-option
+                        v-for="tool in selectedMCPService?.tools || []"
+                        :key="tool.name"
+                        :value="tool.name"
+                        :label="tool.display_name || tool.name"
+                      />
+                    </t-select>
+                    <small v-if="selectedMCPTool?.description" class="workflow-field-help">{{ selectedMCPTool.description }}</small>
+                    <div v-else-if="selectedMCPService.tools.length === 0" class="workflow-field-alert workflow-field-alert--error">
+                      <t-icon name="error-circle" />
+                      <span>该 MCP 服务当前暂无可调用的工具接口。</span>
+                    </div>
+                  </div>
+                </template>
+              </template>
+
+              <template v-else>
+                <div class="workflow-field">
+                  <span class="workflow-field-label">沙箱技能 (Skill) <em class="workflow-required">*</em></span>
+                  <t-select
+                    :value="configString('skill_name')"
+                    :disabled="disabled || !sandboxConfigId || skills.length === 0"
+                    placeholder="请选择沙箱技能..."
+                    filterable
+                    @change="updateConfig('skill_name', String($event || ''))"
+                  >
+                    <t-option
+                      v-for="skill in skills"
+                      :key="skill.name"
+                      :value="skill.name"
+                      :label="skillOptionLabel(skill)"
+                    />
+                  </t-select>
+                  <small v-if="selectedSkill?.description" class="workflow-field-help">{{ selectedSkill.description }}</small>
+                </div>
+
+                <div v-if="!sandboxConfigId" class="workflow-resource-empty">
+                  <t-icon name="server" size="20px" />
+                  <strong>未关联运行沙箱</strong>
+                  <span>Skill 依赖沙箱执行环境，请先关联沙箱。</span>
+                  <button type="button" class="workflow-link-button" @click="emit('select-sandbox')">
+                    关联沙箱
+                  </button>
+                </div>
+                <div v-else-if="skills.length === 0" class="workflow-resource-empty">
+                  <t-icon name="tools" size="20px" />
+                  <strong>当前沙箱未安装可用技能</strong>
+                  <span>请先安装并等待技能就绪。</span>
+                  <button type="button" class="workflow-link-button" @click="emit('manage-skills')">
+                    管理技能
+                  </button>
+                </div>
+              </template>
+
+              <div v-if="toolKind !== 'skill'" class="workflow-field">
+                <span class="workflow-field-label">入参 JSON (Arguments)</span>
+                <textarea
+                  :value="toolArgumentsText"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="6"
+                  :placeholder="toolArgumentPlaceholder"
+                  @input="updateToolArguments(inputValue($event))"
+                />
+                <div v-if="jsonFieldErrors.arguments" class="workflow-field-alert workflow-field-alert--error">
+                  <t-icon name="error-circle" />
+                  <span>{{ jsonFieldErrors.arguments }}</span>
+                </div>
+                <div v-else-if="toolArgumentFields.length" class="workflow-field-help">
+                  参数规范：<code v-for="field in toolArgumentFields" :key="field.name" class="workflow-code-tag">{{ field.label }}</code>
+                </div>
+                <small v-else class="workflow-field-help">{{ toolArgumentHint }}</small>
+              </div>
+              <div v-else class="workflow-field">
+                <span class="workflow-field-label">任务执行模板 <em class="workflow-required">*</em></span>
+                <textarea
+                  :value="configString('task_template')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="6"
+                  placeholder="请根据 {{input.query}} 完成具体任务并返回可交付成果。"
+                  @input="updateConfig('task_template', inputValue($event))"
+                />
+              </div>
+            </div>
+          </template>
+
+          <!-- 最终输出节点 -->
           <template v-else-if="selectedNode.data.workflowType === 'end'">
-            <label class="workflow-field">
-              <span>最终输出模板</span>
-              <textarea
-                :value="configString('text_template')"
-                :disabled="disabled"
-                rows="6"
-                :placeholder="endTemplatePlaceholder"
-                @input="updateConfig('text_template', inputValue($event))"
-              />
-              <small>这里写的内容就是用户最终看到的回答；留空则沿用上一步的输出。</small>
-            </label>
-            <div v-if="upstreamNodeOptions.length" class="workflow-variable-picker">
-              <span class="workflow-variable-picker-label">点击插入上一步的结果</span>
-              <button
-                v-for="option in upstreamNodeOptions"
-                :key="option.value"
-                type="button"
-                class="workflow-variable-chip"
-                :disabled="disabled"
-                :title="option.value"
-                @click="appendTemplateVariable('text_template', option.value)"
-              >
-                {{ option.label }}
-              </button>
+            <div class="workflow-inspector-section">
+              <div class="workflow-section-title">最终回复编排</div>
+              <div class="workflow-field">
+                <span class="workflow-field-label">回复输出模板</span>
+                <textarea
+                  :value="configString('text_template')"
+                  :disabled="disabled"
+                  class="workflow-textarea"
+                  rows="6"
+                  :placeholder="endTemplatePlaceholder"
+                  @input="updateConfig('text_template', inputValue($event))"
+                />
+                <small class="workflow-field-help">用户最终收到的完整文本内容；留空则默认转发上一节点的输出结果。</small>
+              </div>
+              <div v-if="upstreamNodeOptions.length" class="workflow-variable-picker">
+                <span class="workflow-variable-picker-title">快捷插入上游节点变量：</span>
+                <div class="workflow-variable-chips">
+                  <button
+                    v-for="option in upstreamNodeOptions"
+                    :key="option.value"
+                    type="button"
+                    class="workflow-variable-chip"
+                    :disabled="disabled"
+                    :title="option.value"
+                    @click="appendTemplateVariable('text_template', option.value)"
+                  >
+                    + {{ option.label }}
+                  </button>
+                </div>
+              </div>
             </div>
           </template>
 
-          <p v-if="selectedNode.data.workflowType === 'start'" class="workflow-inspector-note">
-            用户输入使用 <code>input.query</code>；附件文本使用 <code>input.attachments_text</code>。
-          </p>
+          <!-- 开始节点说明 -->
+          <div v-if="selectedNode.data.workflowType === 'start'" class="workflow-inspector-section">
+            <div class="workflow-field-alert workflow-field-alert--info">
+              <t-icon name="info-circle" />
+              <span>流程入口节点。下游节点可通过 <code>input.query</code> 获取用户提问，通过 <code>input.attachments_text</code> 读取附件提取文本。</span>
+            </div>
+          </div>
+
+          <!-- 输出与变量参考 -->
+          <div v-if="selectedNode.data.workflowType !== 'start'" class="workflow-inspector-section workflow-inspector-section--help">
+            <div class="workflow-section-title">输出与变量参考</div>
+            <div class="workflow-help-grid">
+              <div class="workflow-help-item">
+                <span class="workflow-help-label">下游引用变量：</span>
+                <code>{{ selectedNodeHelp.variables }}</code>
+              </div>
+              <div class="workflow-help-item">
+                <span class="workflow-help-label">输出属性说明：</span>
+                <span>{{ selectedNodeHelp.output }}</span>
+              </div>
+            </div>
+          </div>
         </template>
 
+        <!-- 连线属性检视器 -->
         <template v-else-if="selectedEdge">
           <div class="workflow-inspector-header">
-            <div>
-              <span class="workflow-inspector-kicker">连线属性</span>
-              <h3>{{ selectedEdge.source }} → {{ selectedEdge.target }}</h3>
+            <div class="workflow-inspector-header-left">
+              <div class="workflow-node-type-pill workflow-node-type-pill--edge">
+                <t-icon name="fork" size="14px" />
+                <span>分支连线</span>
+              </div>
+              <h3 class="workflow-inspector-title">{{ selectedEdge.source }} → {{ selectedEdge.target }}</h3>
             </div>
-            <button v-if="!disabled" type="button" class="workflow-icon-button workflow-icon-button--danger" title="删除连线" @click="removeSelectedEdge">
+            <button
+              v-if="!disabled"
+              type="button"
+              class="workflow-toolbar-btn workflow-toolbar-btn--icon workflow-toolbar-btn--danger"
+              title="删除连线"
+              @click="removeSelectedEdge"
+            >
               <t-icon name="delete" />
             </button>
           </div>
 
-          <label class="workflow-check-field">
-            <input type="checkbox" :checked="selectedEdge.data?.is_default" :disabled="disabled" @change="updateEdgeDefault(($event.target as HTMLInputElement).checked)" />
-            <span>默认分支</span>
-          </label>
-          <p class="workflow-field-help">当其他条件均不满足时走默认分支；一个节点最多只能有一条。</p>
-
-          <template v-if="!selectedEdge.data?.is_default">
-            <label class="workflow-field workflow-field--inline">
-              <span>条件模式</span>
-              <select :value="edgeConditionMode" :disabled="disabled" @change="updateEdgeConditionMode(inputValue($event))">
-                <option value="all">全部满足</option>
-                <option value="any">任一满足</option>
-              </select>
-            </label>
-            <div v-for="(item, index) in edgeConditionItems" :key="index" class="workflow-condition-row">
-              <select :value="item.variable" :disabled="disabled" @change="updateConditionItem(index, 'variable', inputValue($event))">
-                <option v-for="variable in variableOptions" :key="variable" :value="variable">{{ variable }}</option>
-              </select>
-              <select :value="item.operator" :disabled="disabled" @change="updateConditionItem(index, 'operator', inputValue($event))">
-                <option v-for="operator in conditionOperators" :key="operator.value" :value="operator.value">{{ operator.label }}</option>
-              </select>
-              <input :value="conditionValue(item.value)" :disabled="disabled" placeholder="比较值" @input="updateConditionItem(index, 'value', inputValue($event))" />
-              <button v-if="!disabled" type="button" class="workflow-icon-button workflow-icon-button--small" title="删除条件" @click="removeConditionItem(index)">
-                <t-icon name="close" />
-              </button>
+          <div class="workflow-inspector-section">
+            <div class="workflow-switch-card">
+              <div class="workflow-switch-meta">
+                <strong>默认后备分支</strong>
+                <small>当其他所有分支条件都不满足时，将沿此路径继续执行（同一源节点最多 1 条默认分支）。</small>
+              </div>
+              <t-switch
+                :value="Boolean(selectedEdge.data?.is_default)"
+                :disabled="disabled"
+                @change="updateEdgeDefault(Boolean($event))"
+              />
             </div>
-            <button v-if="!disabled" type="button" class="workflow-link-button" @click="addConditionItem">
-              <t-icon name="add" /> 添加条件
-            </button>
-          </template>
+
+            <template v-if="!selectedEdge.data?.is_default">
+              <div class="workflow-field" style="margin-top: 14px;">
+                <span class="workflow-field-label">多条件满足规则</span>
+                <t-radio-group
+                  :value="edgeConditionMode"
+                  :disabled="disabled"
+                  variant="default-filled"
+                  size="small"
+                  @change="updateEdgeConditionMode(String($event))"
+                >
+                  <t-radio-button value="all">满足全部条件 (AND)</t-radio-button>
+                  <t-radio-button value="any">满足任一条件 (OR)</t-radio-button>
+                </t-radio-group>
+              </div>
+
+              <div class="workflow-condition-list">
+                <div v-for="(item, index) in edgeConditionItems" :key="index" class="workflow-condition-card">
+                  <div class="workflow-condition-card-header">
+                    <span class="workflow-condition-index-badge">规则 {{ index + 1 }}</span>
+                    <button
+                      v-if="!disabled"
+                      type="button"
+                      class="workflow-icon-btn-subtle"
+                      title="删除此规则"
+                      @click="removeConditionItem(index)"
+                    >
+                      <t-icon name="close" size="14px" />
+                    </button>
+                  </div>
+                  <div class="workflow-condition-row-grid">
+                    <t-select
+                      :value="item.variable"
+                      :disabled="disabled"
+                      size="small"
+                      placeholder="判断变量"
+                      @change="updateConditionItem(index, 'variable', String($event))"
+                    >
+                      <t-option v-for="variable in variableOptions" :key="variable" :value="variable" :label="variable" />
+                    </t-select>
+                    <t-select
+                      :value="item.operator"
+                      :disabled="disabled"
+                      size="small"
+                      placeholder="操作符"
+                      @change="updateConditionItem(index, 'operator', String($event))"
+                    >
+                      <t-option v-for="operator in conditionOperators" :key="operator.value" :value="operator.value" :label="operator.label" />
+                    </t-select>
+                  </div>
+                  <input
+                    :value="conditionValue(item.value)"
+                    :disabled="disabled"
+                    class="workflow-input workflow-input--small"
+                    placeholder="目标比较值..."
+                    @input="updateConditionItem(index, 'value', inputValue($event))"
+                  />
+                </div>
+              </div>
+
+              <button
+                v-if="!disabled"
+                type="button"
+                class="workflow-toolbar-btn workflow-toolbar-btn--add-condition"
+                @click="addConditionItem"
+              >
+                <t-icon name="add" />
+                <span>添加判断条件</span>
+              </button>
+            </template>
+          </div>
         </template>
 
+        <!-- 空选中态 -->
         <div v-else class="workflow-inspector-empty">
-          <t-icon name="edit-1" size="26px" />
-          <strong>选择节点或连线</strong>
-          <span>点击节点可配置必填项、变量和输出。</span>
-          <span>点击连线可配置默认分支和路由条件。</span>
+          <div class="workflow-empty-icon-ring">
+            <t-icon name="cursor" size="24px" />
+          </div>
+          <strong>选中节点或连线以配置</strong>
+          <p>在画布上点击任意节点以修改入参、知识库或模型提示词；点击连线可设置分支路由条件。</p>
         </div>
       </aside>
     </div>
@@ -592,11 +897,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { MiniMap } from '@vue-flow/minimap';
-import { Position, VueFlow, useVueFlow, type Connection } from '@vue-flow/core';
+import { ConnectionMode, Handle, MarkerType, Position, VueFlow, useVueFlow, type Connection } from '@vue-flow/core';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { copyToClipboard } from '@/utils/clipboard';
 import type {
@@ -713,6 +1018,15 @@ const validationStatus = ref<'idle' | 'hint' | 'error' | 'success'>('idle');
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 const viewport = ref({ x: 0, y: 0, zoom: 1 });
 const applyingModel = ref(false);
+
+/** 撤回/重做历史快照 */
+const undoStack = ref<string[]>([]);
+const redoStack = ref<string[]>([]);
+const isHistoryApplying = ref(false);
+const MAX_HISTORY = 50;
+
+const canUndo = computed(() => undoStack.value.length > 0 && !props.disabled);
+const canRedo = computed(() => redoStack.value.length > 0 && !props.disabled);
 /**
  * JSON 文本框的原始输入。非法 JSON 也要能显示在输入框里，
  * 因此原始文本与已解析的 config 分开保存；只有解析成功才写回 config。
@@ -822,7 +1136,10 @@ function loadDefinition(value?: WorkflowDefinition | null) {
     id: edge.id,
     source: edge.source,
     target: edge.target,
+    sourceHandle: edge.source_handle || 'right',
+    targetHandle: edge.target_handle || 'left',
     type: 'smoothstep',
+    markerEnd: MarkerType.ArrowClosed,
     label: edge.is_default ? '默认' : '',
     data: {
       order: edge.order,
@@ -833,6 +1150,8 @@ function loadDefinition(value?: WorkflowDefinition | null) {
   }));
   selectedNodeId.value = '';
   selectedEdgeId.value = '';
+  undoStack.value = [];
+  redoStack.value = [];
   applyingModel.value = false;
 }
 
@@ -850,6 +1169,8 @@ function toDefinition(): WorkflowDefinition {
       id: edge.id,
       source: edge.source,
       target: edge.target,
+      source_handle: edge.sourceHandle || undefined,
+      target_handle: edge.targetHandle || undefined,
       order: edge.data?.order ?? 0,
       is_default: !!edge.data?.is_default,
       ...(edge.data?.condition ? { condition: clone(edge.data.condition) } : {}),
@@ -868,7 +1189,175 @@ function emitDefinition() {
   const next = toDefinition();
   lastEmitted = JSON.stringify(next);
   emit('update:modelValue', next);
+  if (!isHistoryApplying.value) {
+    pushSnapshotDebounced();
+  }
 }
+
+/** 捕获当前画布的序列化快照 */
+function captureCurrentSnapshot(): string {
+  return JSON.stringify({
+    nodes: flowNodes.value.map((node) => ({
+      id: node.id,
+      type: node.data.workflowType,
+      name: node.data.name,
+      position: { x: Number(node.position.x) || 0, y: Number(node.position.y) || 0 },
+      config: clone(node.data.config || {}),
+    })),
+    edges: flowEdges.value.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      source_handle: edge.sourceHandle || undefined,
+      target_handle: edge.targetHandle || undefined,
+      order: edge.data?.order ?? 0,
+      is_default: !!edge.data?.is_default,
+      condition: edge.data?.condition ? clone(edge.data.condition) : undefined,
+    })),
+  });
+}
+
+/** 记录一个立即可撤回的快照 */
+function pushSnapshot() {
+  if (isHistoryApplying.value || applyingModel.value || props.disabled) return;
+  const current = captureCurrentSnapshot();
+  const last = undoStack.value[undoStack.value.length - 1];
+  if (last === current) return;
+
+  undoStack.value.push(current);
+  if (undoStack.value.length > MAX_HISTORY) {
+    undoStack.value.shift();
+  }
+  // 用户产生新操作时清空重做栈
+  redoStack.value = [];
+}
+
+let snapshotDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+function pushSnapshotDebounced(delay = 500) {
+  if (isHistoryApplying.value || applyingModel.value || props.disabled) return;
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer);
+  }
+  snapshotDebounceTimer = setTimeout(() => {
+    pushSnapshot();
+  }, delay);
+}
+
+/** 从历史快照精准恢复节点与连线 */
+function restoreSnapshot(snapshotStr: string) {
+  try {
+    const snapshot = JSON.parse(snapshotStr);
+    isHistoryApplying.value = true;
+    flowNodes.value = (snapshot.nodes || []).map((node: any): EditorNode => ({
+      id: node.id,
+      type: 'default',
+      label: node.name,
+      position: { x: node.position.x, y: node.position.y },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      class: nodeClass(node.type),
+      data: { workflowType: node.type, name: node.name, config: clone(node.config || defaultConfig(node.type)) },
+      draggable: !props.disabled,
+      deletable: !props.disabled,
+    }));
+    flowEdges.value = (snapshot.edges || []).map((edge: any): EditorEdge => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.source_handle || 'right',
+      targetHandle: edge.target_handle || 'left',
+      type: 'smoothstep',
+      markerEnd: MarkerType.ArrowClosed,
+      label: edge.is_default ? '默认' : '',
+      data: {
+        order: edge.order,
+        is_default: !!edge.is_default,
+        condition: edge.condition ? clone(edge.condition) : undefined,
+      },
+      deletable: !props.disabled,
+    }));
+    clearSelection();
+  } finally {
+    nextTick(() => {
+      isHistoryApplying.value = false;
+      emitDefinition();
+    });
+  }
+}
+
+/** 执行撤回 */
+function undo() {
+  if (!canUndo.value || props.disabled) return;
+  const current = captureCurrentSnapshot();
+  const previous = undoStack.value.pop();
+  if (previous) {
+    redoStack.value.push(current);
+    restoreSnapshot(previous);
+    showHint('已撤回上一操作');
+  }
+}
+
+/** 执行重做 */
+function redo() {
+  if (!canRedo.value || props.disabled) return;
+  const current = captureCurrentSnapshot();
+  const next = redoStack.value.pop();
+  if (next) {
+    undoStack.value.push(current);
+    restoreSnapshot(next);
+    showHint('已重做操作');
+  }
+}
+
+/** 节点拖拽移动停止时记录快照 */
+function onNodeDragStop() {
+  pushSnapshot();
+  emitDefinition();
+}
+
+/** 监听全局撤回与重做快捷键 */
+function handleKeyDown(event: KeyboardEvent) {
+  if (props.disabled) return;
+  // 文本框打字中不劫持输入框原生撤回
+  const target = event.target as HTMLElement | null;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+    return;
+  }
+
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+  const isModifier = isMac ? event.metaKey : event.ctrlKey;
+  if (!isModifier) return;
+
+  const key = event.key.toLowerCase();
+  // 重做: Cmd/Ctrl + Shift + Z 或者 Cmd/Ctrl + Y
+  if ((key === 'z' && event.shiftKey) || (key === 'y' && !event.shiftKey)) {
+    if (canRedo.value) {
+      event.preventDefault();
+      redo();
+    }
+    return;
+  }
+
+  // 撤回: Cmd/Ctrl + Z (无 Shift)
+  if (key === 'z' && !event.shiftKey) {
+    if (canUndo.value) {
+      event.preventDefault();
+      undo();
+    }
+    return;
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeyDown);
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer);
+  }
+});
 
 watch(
   () => props.modelValue,
@@ -1344,8 +1833,54 @@ function parseConditionValue(value: string): unknown {
   }
 }
 
+const showOnboardingGuide = ref(false);
+
 function nodeTypeLabel(type: WorkflowNodeType): string {
   return nodePalette.find((item) => item.type === type)?.label || type;
+}
+
+function nodeTypeIcon(type: WorkflowNodeType): string {
+  return nodePalette.find((item) => item.type === type)?.icon || 'view-module';
+}
+
+function getNodeSnippet(data: WorkflowNodeData): string {
+  if (!data?.config) return '';
+  switch (data.workflowType) {
+    case 'start':
+      return '接收提问与附件输入';
+    case 'llm': {
+      const prompt = (data.config.prompt as string) || '';
+      return prompt ? (prompt.length > 20 ? prompt.slice(0, 20) + '...' : prompt) : '待设置模型提示词';
+    }
+    case 'knowledge-retrieval': {
+      const kbIds = (data.config.knowledge_base_ids as string[]) || [];
+      return kbIds.length ? `已选 ${kbIds.length} 个知识库` : '未选择知识库';
+    }
+    case 'llm-decision': {
+      const choices = (data.config.choices as string[]) || [];
+      return choices.length ? `${choices.length} 个候选分支` : '待设置候选分支';
+    }
+    case 'http-request': {
+      const method = data.config.method || 'GET';
+      const url = data.config.url || '';
+      return `${method} ${url ? (url.length > 16 ? url.slice(0, 16) + '...' : url) : '未配置接口'}`;
+    }
+    case 'tool': {
+      const kind = data.config.kind || 'builtin';
+      if (kind === 'builtin') return `内置: ${data.config.tool_name || '未选'}`;
+      if (kind === 'mcp') return `MCP: ${data.config.tool_name || '未选'}`;
+      return `Skill: ${data.config.skill_name || '未选'}`;
+    }
+    case 'end':
+      return data.config.text_template ? '自定义回复输出' : '输出最终回答';
+    default:
+      return '';
+  }
+}
+
+function onKnowledgeBasesChange(val: unknown) {
+  const ids = Array.isArray(val) ? val.map(String) : [];
+  updateRetrievalKnowledgeBases(ids);
 }
 
 /** 临时提示（黄色），用于解释"为什么刚才那步没生效"。 */
@@ -1381,6 +1916,7 @@ function selectTemplate(template: WorkflowTemplate) {
     if (!confirmed) return;
   }
 
+  pushSnapshot();
   const definition = template.create();
   loadDefinition(definition);
   appliedTemplateId.value = template.id;
@@ -1415,6 +1951,7 @@ function addNode(type: WorkflowNodeType, position?: { x: number; y: number }) {
     showHint('每个工作流只能有一个开始节点，画布上已经有一个了。');
     return;
   }
+  pushSnapshot();
   const id = newNodeID(type);
   const name = nodeTypeLabel(type);
   flowNodes.value.push({
@@ -1445,22 +1982,75 @@ function onCanvasDrop(event: DragEvent) {
   addNode(type, nextNodePosition());
 }
 
+/**
+ * 校验节点间连线的合法性
+ * 1. 阻止自连
+ * 2. 阻止连入开始节点
+ * 3. 阻止从结束节点连出
+ * 4. 正在拖拽中的新连接：避免重复连接相同桩位
+ * 注：VueFlow 内部解析已有 edge 时也会调用本函数，已有边必定带 id，此时绝不能误当成重复边丢弃！
+ */
+function isValidConnection(connection: Connection | EditorEdge): boolean {
+  if (!connection.source || !connection.target) return false;
+  if (connection.source === connection.target) return false;
+
+  const targetNode = flowNodes.value.find((n) => n.id === connection.target);
+  if (targetNode?.data?.workflowType === 'start') return false;
+
+  const sourceNode = flowNodes.value.find((n) => n.id === connection.source);
+  if (sourceNode?.data?.workflowType === 'end') return false;
+
+  // VueFlow 内部在解析已有的 edge 时带有 id 属性，满足拓扑规则即可通过
+  const edgeId = (connection as EditorEdge).id;
+  if (edgeId) {
+    return true;
+  }
+
+  // 正在交互拖拽的新连线：阻止相同方位重复吸附
+  const sHandle = connection.sourceHandle || '';
+  const tHandle = connection.targetHandle || '';
+  const isDuplicate = flowEdges.value.some(
+    (edge) =>
+      edge.source === connection.source &&
+      edge.target === connection.target &&
+      (edge.sourceHandle || '') === sHandle &&
+      (edge.targetHandle || '') === tHandle,
+  );
+  if (isDuplicate) return false;
+
+  return true;
+}
+
 function onConnect(connection: Connection) {
   if (props.disabled || !connection.source || !connection.target) return;
-  if (connection.source === connection.target) {
-    showHint('一个步骤不能连到自己，请连到后面的步骤。');
+  if (!isValidConnection(connection)) {
+    if (connection.source === connection.target) {
+      showHint('一个步骤不能连到自己，请连到后面的步骤。');
+    } else {
+      const sourceNode = flowNodes.value.find((n) => n.id === connection.source);
+      const targetNode = flowNodes.value.find((n) => n.id === connection.target);
+      if (targetNode?.data?.workflowType === 'start') {
+        showHint('开始节点不能作为连入目标。');
+      } else if (sourceNode?.data?.workflowType === 'end') {
+        showHint('输出回答节点不能向外连出。');
+      } else {
+        showHint('该方位已经连好了，不用再连一次。');
+      }
+    }
     return;
   }
-  if (flowEdges.value.some((edge) => edge.source === connection.source && edge.target === connection.target)) {
-    showHint('这两个步骤已经连好了，不用再连一次。');
-    return;
-  }
+  pushSnapshot();
+  const sHandle = connection.sourceHandle || undefined;
+  const tHandle = connection.targetHandle || undefined;
   const order = flowEdges.value.filter((edge) => edge.source === connection.source).length;
   const edge: EditorEdge = {
     id: `edge-${Date.now()}-${order}`,
     source: connection.source,
     target: connection.target,
+    sourceHandle: sHandle,
+    targetHandle: tHandle,
     type: 'smoothstep',
+    markerEnd: MarkerType.ArrowClosed,
     data: { order, is_default: order === 0 },
     label: order === 0 ? '默认' : '',
     deletable: true,
@@ -1492,6 +2082,7 @@ function clearSelection() {
 
 function removeSelectedNode() {
   if (props.disabled || !selectedNode.value || selectedNode.value.data.workflowType === 'start') return;
+  pushSnapshot();
   const id = selectedNode.value.id;
   flowNodes.value = flowNodes.value.filter((node) => node.id !== id);
   flowEdges.value = flowEdges.value.filter((edge) => edge.source !== id && edge.target !== id);
@@ -1501,6 +2092,7 @@ function removeSelectedNode() {
 
 function removeSelectedEdge() {
   if (props.disabled || !selectedEdge.value) return;
+  pushSnapshot();
   flowEdges.value = flowEdges.value.filter((edge) => edge.id !== selectedEdge.value?.id);
   clearSelection();
   emitDefinition();
@@ -1949,27 +2541,54 @@ defineExpose({
   min-height: 0;
   height: 100%;
   color: var(--td-text-color-primary);
+  font-family: inherit;
 }
 
+/* --------------------------------------------------------------------------
+   顶栏工具区：轻盈现代 Studio 风格，释放垂直视口空间
+   -------------------------------------------------------------------------- */
 .workflow-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 0 16px;
+  padding: 0 0 12px;
   border-bottom: 1px solid var(--td-component-stroke);
+  flex-shrink: 0;
+}
+
+.workflow-toolbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workflow-toolbar-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .workflow-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.workflow-subtitle,
-.workflow-panel-hint,
-.workflow-field-help {
-  margin: 4px 0 0;
+.workflow-stats-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--td-brand-color) 10%, transparent);
+  color: var(--td-brand-color);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.workflow-subtitle {
+  margin: 0;
   color: var(--td-text-color-secondary);
   font-size: 12px;
   line-height: 1.5;
@@ -1979,72 +2598,102 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
-.workflow-toolbar-button,
-.workflow-icon-button,
-.workflow-link-button {
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 6px;
-  background: var(--td-bg-color-container);
-  color: var(--td-text-color-primary);
-  cursor: pointer;
-  transition: border-color .15s ease, color .15s ease, background .15s ease;
-}
-
-.workflow-toolbar-button,
-.workflow-link-button {
+.workflow-toolbar-btn {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.workflow-icon-button {
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
   align-items: center;
   justify-content: center;
-  padding: 0;
-}
-
-.workflow-icon-button--small {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-}
-
-.workflow-toolbar-button:hover:not(:disabled),
-.workflow-icon-button:hover:not(:disabled),
-.workflow-link-button:hover:not(:disabled) {
-  border-color: var(--td-brand-color);
-  color: var(--td-brand-color);
-}
-
-.workflow-icon-button--danger:hover:not(:disabled) {
-  border-color: var(--td-error-color);
-  color: var(--td-error-color);
-}
-
-.workflow-toolbar-button:disabled,
-.workflow-icon-button:disabled,
-.workflow-link-button:disabled {
-  cursor: not-allowed;
-  opacity: .5;
-}
-
-.workflow-onboarding {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 12px;
-  overflow: hidden;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
   border: 1px solid var(--td-component-stroke);
   border-radius: 7px;
-  background: var(--td-component-stroke);
+  background: var(--td-bg-color-container);
+  color: var(--td-text-color-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+
+  &:hover:not(:disabled) {
+    border-color: var(--td-brand-color);
+    color: var(--td-brand-color);
+    background: color-mix(in srgb, var(--td-brand-color) 4%, var(--td-bg-color-container));
+  }
+
+  &.is-active {
+    border-color: var(--td-brand-color);
+    background: color-mix(in srgb, var(--td-brand-color) 10%, var(--td-bg-color-container));
+    color: var(--td-brand-color);
+  }
+
+  &--icon {
+    width: 32px;
+    padding: 0;
+  }
+
+  &--primary {
+    border-color: var(--td-brand-color);
+    background: var(--td-brand-color);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(0, 82, 217, 0.22);
+
+    &:hover:not(:disabled) {
+      background: var(--td-brand-color-hover);
+      border-color: var(--td-brand-color-hover);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 82, 217, 0.32);
+    }
+  }
+
+  &--danger {
+    color: var(--td-text-color-secondary);
+
+    &:hover:not(:disabled) {
+      border-color: var(--td-error-color);
+      color: var(--td-error-color);
+      background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
+    }
+  }
+
+  &--add-condition {
+    width: 100%;
+    margin-top: 8px;
+    border-style: dashed;
+    color: var(--td-brand-color);
+
+    &:hover:not(:disabled) {
+      border-style: solid;
+      background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
+    }
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   新手向导折叠横幅
+   -------------------------------------------------------------------------- */
+.workflow-onboarding {
+  position: relative;
+  margin-top: 10px;
+  padding: 10px 36px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--td-brand-color) 20%, var(--td-component-stroke));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--td-brand-color) 4%, var(--td-bg-color-secondarycontainer));
+  flex-shrink: 0;
+}
+
+.workflow-onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .workflow-onboarding-step {
@@ -2052,8 +2701,6 @@ defineExpose({
   align-items: flex-start;
   gap: 8px;
   min-width: 0;
-  padding: 9px 10px;
-  background: var(--td-bg-color-secondarycontainer);
 }
 
 .workflow-onboarding-index {
@@ -2066,385 +2713,478 @@ defineExpose({
   border-radius: 50%;
   background: var(--td-brand-color);
   color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.workflow-onboarding-step strong,
-.workflow-onboarding-step small {
-  display: block;
-}
-
-.workflow-onboarding-step strong {
   font-size: 11px;
-  line-height: 20px;
-}
-
-.workflow-onboarding-step small {
+  font-weight: 600;
   margin-top: 1px;
+}
+
+.workflow-onboarding-content {
+  min-width: 0;
+
+  strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+  }
+
+  small {
+    display: block;
+    margin-top: 2px;
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+}
+
+.workflow-onboarding-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
   color: var(--td-text-color-secondary);
-  font-size: 10px;
-  line-height: 1.35;
-}
+  border-radius: 4px;
+  cursor: pointer;
 
-.workflow-layout,
-.workflow-templates {
-  min-height: 0;
-  flex: 1;
-  margin-top: 16px;
-}
-
-.workflow-layout {
-  display: grid;
-  grid-template-columns: 182px minmax(420px, 1fr) 290px;
-  overflow: hidden;
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 8px;
+  &:hover {
+    background: var(--td-bg-color-container-hover);
+    color: var(--td-text-color-primary);
+  }
 }
 
 /* --------------------------------------------------------------------------
-   模板面板：让空画布状态先给出"可以选一个现成的"，而不是要求用户从零连线。
+   工作流主布局：Palette (220px) | Canvas (自适应) | Inspector (380px)
    -------------------------------------------------------------------------- */
-.workflow-templates {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.workflow-templates-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.workflow-templates-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.workflow-templates-subtitle {
-  max-width: 62ch;
-  margin: 4px 0 0;
-  color: var(--td-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.workflow-template-grid {
+.workflow-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
-  align-content: start;
+  grid-template-columns: 220px minmax(460px, 1fr) 380px;
+  flex: 1;
+  min-height: 0;
+  margin-top: 12px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.04);
 }
 
-.workflow-template-card {
+/* --------------------------------------------------------------------------
+   左侧节点组件库 (Palette)
+   -------------------------------------------------------------------------- */
+.workflow-palette {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 8px;
-  background: var(--td-bg-color-container);
-  color: var(--td-text-color-primary);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 160ms ease-out, box-shadow 160ms ease-out, transform 160ms ease-out;
-}
-
-.workflow-template-card:hover:not(:disabled) {
-  border-color: var(--td-brand-color);
-  box-shadow: 0 4px 14px rgba(15, 18, 22, 0.08);
-  transform: translateY(-1px);
-}
-
-.workflow-template-card:active:not(:disabled) {
-  transform: scale(0.99);
-}
-
-.workflow-template-card--active {
-  border-color: var(--td-brand-color);
-  box-shadow: 0 0 0 1px var(--td-brand-color) inset;
-}
-
-.workflow-template-card:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.workflow-template-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.workflow-template-icon {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 7px;
-  background: var(--td-brand-color-light);
-  color: var(--td-brand-color);
-  font-size: 15px;
-}
-
-.workflow-template-heading strong,
-.workflow-template-heading small {
-  display: block;
-}
-
-.workflow-template-heading strong {
-  font-size: 13px;
-}
-
-.workflow-template-heading small {
-  margin-top: 2px;
-  color: var(--td-text-color-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-/* 步骤条真实反映执行顺序，因此这里的有序列表承载信息而不是装饰。 */
-.workflow-template-flow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  counter-reset: workflow-template-step;
-}
-
-.workflow-template-flow li {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: var(--td-bg-color-secondarycontainer);
-  color: var(--td-text-color-secondary);
-  font-size: 10px;
-  counter-increment: workflow-template-step;
-}
-
-.workflow-template-flow li::before {
-  content: counter(workflow-template-step);
-  color: var(--td-brand-color);
-  font-weight: 600;
-}
-
-.workflow-template-flow li + li::before {
-  content: '→';
-  margin-right: 2px;
-  color: var(--td-text-color-placeholder);
-  font-weight: 400;
-}
-
-.workflow-template-detail {
-  margin: 0;
-  color: var(--td-text-color-secondary);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.workflow-template-needs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: auto;
-  padding-top: 2px;
-}
-
-.workflow-template-needs-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--td-warning-color);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.workflow-template-need {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--td-warning-color-light);
-  color: var(--td-warning-color-8);
-  font-size: 10px;
-}
-
-.workflow-template-action {
-  color: var(--td-brand-color);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.workflow-palette,
-.workflow-inspector {
   min-width: 0;
   overflow-y: auto;
+  padding: 14px 12px;
+  border-right: 1px solid var(--td-component-stroke);
   background: var(--td-bg-color-secondarycontainer);
 }
 
-.workflow-palette {
-  padding: 16px 12px;
-  border-right: 1px solid var(--td-component-stroke);
+.workflow-panel-header {
+  margin-bottom: 6px;
 }
 
 .workflow-panel-heading {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.workflow-panel-hint {
+  margin: 3px 0 0;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.workflow-palette-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .workflow-palette-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   width: 100%;
-  margin-top: 10px;
-  padding: 10px 8px;
+  padding: 9px 10px;
   border: 1px solid var(--td-component-stroke);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--td-bg-color-container);
   color: var(--td-text-color-primary);
   text-align: left;
   cursor: grab;
-}
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 
-.workflow-palette-item:active {
-  cursor: grabbing;
-}
+  &:hover:not(:disabled) {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
+    transform: translateY(-1px);
+  }
 
-.workflow-palette-item:hover:not(:disabled) {
-  border-color: var(--td-brand-color);
-}
+  &:active:not(:disabled) {
+    cursor: grabbing;
+    transform: scale(0.99);
+  }
 
-.workflow-palette-item:disabled {
-  cursor: not-allowed;
-  opacity: .48;
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
 }
 
 .workflow-palette-icon {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
   align-items: center;
   justify-content: center;
-  flex: 0 0 28px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
-  color: var(--td-brand-color);
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 7px;
+  font-size: 16px;
 }
 
-.workflow-palette-item strong,
-.workflow-palette-item small {
-  display: block;
+.workflow-palette-info {
+  min-width: 0;
+  flex: 1;
+
+  strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  small {
+    display: block;
+    margin-top: 2px;
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
-.workflow-palette-item strong {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.workflow-palette-item small {
-  margin-top: 2px;
-  color: var(--td-text-color-secondary);
-  font-size: 10px;
-  line-height: 1.3;
-}
+/* 节点组件专属色调 */
+.workflow-palette-item--start .workflow-palette-icon { background: #ecfdf5; color: #059669; }
+.workflow-palette-item--llm .workflow-palette-icon { background: #eff6ff; color: #0052d9; }
+.workflow-palette-item--knowledge-retrieval .workflow-palette-icon { background: #e0f2fe; color: #0284c7; }
+.workflow-palette-item--llm-decision .workflow-palette-icon { background: #f5f3ff; color: #7c3aed; }
+.workflow-palette-item--http-request .workflow-palette-icon { background: #fff1f2; color: #e11d48; }
+.workflow-palette-item--tool .workflow-palette-icon { background: #fffbeb; color: #d97706; }
+.workflow-palette-item--end .workflow-palette-icon { background: #f0fdfa; color: #0d9488; }
 
 .workflow-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 18px;
+  align-items: center;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--td-component-stroke);
   color: var(--td-text-color-secondary);
-  font-size: 11px;
+  font-size: 12px;
+}
+
+.workflow-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .workflow-legend-dot {
   width: 8px;
   height: 8px;
-  margin: 3px 0 0 4px;
   border-radius: 50%;
+
+  &--start { background: #059669; }
+  &--end { background: #0d9488; }
 }
 
-.workflow-legend-dot--start { background: #2ba471; }
-.workflow-legend-dot--end { background: #d54941; }
-
+/* --------------------------------------------------------------------------
+   中央画布 (Canvas) 与 VueFlow 自定义节点
+   -------------------------------------------------------------------------- */
 .workflow-canvas {
   position: relative;
   min-width: 0;
-  min-height: 420px;
+  min-height: 480px;
   background-color: #f8fafc;
-  background-image: radial-gradient(#d7dee8 .8px, transparent .8px);
+  background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
   background-size: 20px 20px;
+
+  &--disabled {
+    background-color: var(--td-bg-color-container);
+  }
+
+  :deep(.vue-flow) {
+    width: 100%;
+    height: 100%;
+  }
+
+  :deep(.vue-flow__node) {
+    cursor: default;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+
+  :deep(.vue-flow__edge-path) {
+    stroke: #94a3b8;
+    stroke-width: 2px;
+    transition: stroke 0.2s cubic-bezier(0.4, 0, 0.2, 1), stroke-width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  :deep(.vue-flow__arrowhead polyline) {
+    stroke: #94a3b8 !important;
+    fill: #94a3b8 !important;
+    transition: stroke 0.2s cubic-bezier(0.4, 0, 0.2, 1), fill 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  :deep(.vue-flow__edge:hover .vue-flow__edge-path) {
+    stroke: #475569;
+    stroke-width: 2.5px;
+  }
+
+  :deep(.vue-flow__edge:hover .vue-flow__arrowhead polyline) {
+    stroke: #475569 !important;
+    fill: #475569 !important;
+  }
+
+  :deep(.vue-flow__edge.selected .vue-flow__edge-path) {
+    stroke: var(--td-brand-color, #0052d9);
+    stroke-width: 2.5px;
+  }
+
+  :deep(.vue-flow__edge.selected .vue-flow__arrowhead polyline) {
+    stroke: var(--td-brand-color, #0052d9) !important;
+    fill: var(--td-brand-color, #0052d9) !important;
+  }
+
+  :deep(.vue-flow__connection-path) {
+    stroke: var(--td-brand-color, #0052d9);
+    stroke-width: 2px;
+    stroke-dasharray: 5;
+    animation: dashdraw 0.5s linear infinite;
+  }
 }
 
-.workflow-canvas--disabled {
-  background-color: var(--td-bg-color-container);
-}
-
-.workflow-canvas :deep(.vue-flow) {
-  width: 100%;
-  height: 100%;
-}
-
-.workflow-canvas :deep(.vue-flow__node) {
-  min-width: 148px;
+/* 自定义节点卡片 */
+.workflow-node-card {
+  position: relative;
+  width: 210px;
+  border-radius: 10px;
+  background: var(--td-bg-color-container, #ffffff);
   border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, .08);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.06);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: visible;
+
+  &:hover {
+    border-color: #94a3b8;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+  }
+
+  &.is-selected {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 0 0 2px var(--td-brand-color), 0 8px 24px rgba(0, 82, 217, 0.18);
+    transform: translateY(-1px);
+  }
 }
 
-.workflow-canvas :deep(.vue-flow__node.selected) {
-  border-color: var(--td-brand-color);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--td-brand-color) 18%, transparent), 0 2px 8px rgba(15, 23, 42, .08);
+.workflow-node-stripe {
+  height: 3.5px;
+  border-radius: 10px 10px 0 0;
+  background: #94a3b8;
 }
 
-.workflow-canvas :deep(.workflow-flow-node--start) { border-top: 3px solid #2ba471; }
-.workflow-canvas :deep(.workflow-flow-node--end) { border-top: 3px solid #d54941; }
-.workflow-canvas :deep(.workflow-flow-node--llm) { border-top: 3px solid #0052d9; }
-.workflow-canvas :deep(.workflow-flow-node--knowledge-retrieval) { border-top: 3px solid #165dff; }
-.workflow-canvas :deep(.workflow-flow-node--llm-decision) { border-top: 3px solid #8e56dd; }
-.workflow-canvas :deep(.workflow-flow-node--http-request) { border-top: 3px solid #d54941; }
-.workflow-canvas :deep(.workflow-flow-node--tool) { border-top: 3px solid #ed7b2f; }
+.workflow-node-card--start .workflow-node-stripe { background: #059669; }
+.workflow-node-card--llm .workflow-node-stripe { background: #0052d9; }
+.workflow-node-card--knowledge-retrieval .workflow-node-stripe { background: #0284c7; }
+.workflow-node-card--llm-decision .workflow-node-stripe { background: #7c3aed; }
+.workflow-node-card--http-request .workflow-node-stripe { background: #e11d48; }
+.workflow-node-card--tool .workflow-node-stripe { background: #d97706; }
+.workflow-node-card--end .workflow-node-stripe { background: #0d9488; }
 
-.workflow-canvas :deep(.vue-flow__node-default .vue-flow__handle) {
-  width: 8px;
-  height: 8px;
-  border: 2px solid #fff;
-  background: var(--td-brand-color);
+.workflow-node-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px 11px;
 }
 
-.workflow-canvas :deep(.vue-flow__edge-textbg) {
-  fill: var(--td-bg-color-container);
+.workflow-node-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 6px;
+  font-size: 15px;
+  margin-top: 1px;
+}
+
+.workflow-node-card--start .workflow-node-icon-badge { background: #ecfdf5; color: #059669; }
+.workflow-node-card--llm .workflow-node-icon-badge { background: #eff6ff; color: #0052d9; }
+.workflow-node-card--knowledge-retrieval .workflow-node-icon-badge { background: #e0f2fe; color: #0284c7; }
+.workflow-node-card--llm-decision .workflow-node-icon-badge { background: #f5f3ff; color: #7c3aed; }
+.workflow-node-card--http-request .workflow-node-icon-badge { background: #fff1f2; color: #e11d48; }
+.workflow-node-card--tool .workflow-node-icon-badge { background: #fffbeb; color: #d97706; }
+.workflow-node-card--end .workflow-node-icon-badge { background: #f0fdfa; color: #0d9488; }
+
+.workflow-node-text-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.workflow-node-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workflow-node-snippet {
+  margin-top: 3px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 四向连接桩 Handle 优化 */
+.workflow-node-handle {
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  border: 2px solid #ffffff !important;
+  background: var(--td-brand-color, #0052d9) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18) !important;
+  opacity: 0.65;
+  pointer-events: all !important;
+  cursor: crosshair !important;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  z-index: 10;
+
+  /* 扩大鼠标命中热区至 26px，方便用户极其顺手地抓取连线与吸附 */
+  &::after {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    right: -8px;
+    bottom: -8px;
+    border-radius: 50%;
+    cursor: crosshair;
+    pointer-events: all;
+  }
+
+  &:hover {
+    opacity: 1 !important;
+  }
+}
+
+/* 节点悬停或选中时，四个方位的 Handle 全显 */
+.workflow-node-card:hover .workflow-node-handle,
+.workflow-node-card.is-selected .workflow-node-handle {
+  opacity: 1;
+}
+
+/* 各方位在 Hover 时的动效，保留原 translate 同时平滑放大 1.4 倍并伴随柔和呼吸光晕 */
+.workflow-node-handle--top:hover {
+  transform: translate(-50%, -50%) scale(1.4) !important;
+  box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+}
+
+.workflow-node-handle--right:hover {
+  transform: translate(50%, -50%) scale(1.4) !important;
+  box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+}
+
+.workflow-node-handle--bottom:hover {
+  transform: translate(-50%, 50%) scale(1.4) !important;
+  box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+}
+
+.workflow-node-handle--left:hover {
+  transform: translate(-50%, -50%) scale(1.4) !important;
+  box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* 根据节点主题色呼应 Handle 色彩 */
+.workflow-node-card--start .workflow-node-handle {
+  background: #059669 !important;
+  &--top:hover, &--right:hover, &--bottom:hover, &--left:hover {
+    box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  }
+}
+
+.workflow-node-card--end .workflow-node-handle {
+  background: #0d9488 !important;
+  &--top:hover, &--right:hover, &--bottom:hover, &--left:hover {
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  }
+}
+
+.workflow-node-card--knowledge-retrieval .workflow-node-handle {
+  background: #0284c7 !important;
+  &--top:hover, &--right:hover, &--bottom:hover, &--left:hover {
+    box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  }
+}
+
+.workflow-node-card--llm-decision .workflow-node-handle {
+  background: #7c3aed !important;
+  &--top:hover, &--right:hover, &--bottom:hover, &--left:hover {
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  }
+}
+
+.workflow-node-card--http-request .workflow-node-handle {
+  background: #e11d48 !important;
+  &--top:hover, &--right:hover, &--bottom:hover, &--left:hover {
+    box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  }
+}
+
+.workflow-node-card--tool .workflow-node-handle {
+  background: #d97706 !important;
+  &--top:hover, &--right:hover, &--bottom:hover, &--left:hover {
+    box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.25), 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  }
 }
 
 .workflow-placeholder-note {
   position: absolute;
-  top: 10px;
+  top: 12px;
   left: 50%;
   z-index: 3;
   display: flex;
-  max-width: calc(100% - 120px);
+  max-width: calc(100% - 100px);
   align-items: center;
-  gap: 6px;
-  padding: 6px 9px;
+  gap: 7px;
+  padding: 6px 12px;
   transform: translateX(-50%);
-  border: 1px solid color-mix(in srgb, var(--td-brand-color) 24%, var(--td-component-stroke));
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--td-brand-color) 25%, var(--td-component-stroke));
+  border-radius: 7px;
   background: color-mix(in srgb, var(--td-brand-color) 7%, var(--td-bg-color-container));
   color: var(--td-text-color-secondary);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
   pointer-events: none;
 }
@@ -2456,22 +3196,29 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   transform: translate(-50%, -50%);
   color: var(--td-text-color-secondary);
   pointer-events: none;
+
+  strong {
+    color: var(--td-text-color-primary);
+    font-size: 14px;
+  }
+
+  span {
+    font-size: 12px;
+  }
 }
 
-.workflow-canvas-empty strong {
-  color: var(--td-text-color-primary);
-  font-size: 13px;
-}
-
-.workflow-canvas-empty span {
-  font-size: 11px;
-}
-
+/* --------------------------------------------------------------------------
+   右侧属性检查器 (Inspector)
+   -------------------------------------------------------------------------- */
 .workflow-inspector {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
   padding: 16px;
   border-left: 1px solid var(--td-component-stroke);
   background: var(--td-bg-color-container);
@@ -2481,341 +3228,682 @@ defineExpose({
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
-.workflow-inspector-kicker {
-  color: var(--td-brand-color);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .04em;
+.workflow-inspector-header-left {
+  min-width: 0;
+  flex: 1;
 }
 
-/* 条件变量和输出模板都要求写 nodes.<节点 ID>，所以把 ID 直接摆出来。 */
-.workflow-node-id {
+.workflow-node-type-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  max-width: 190px;
-  margin-top: 4px;
-  padding: 2px 6px;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-secondary);
+
+  &--start { background: #ecfdf5; color: #059669; }
+  &--llm { background: #eff6ff; color: #0052d9; }
+  &--knowledge-retrieval { background: #e0f2fe; color: #0284c7; }
+  &--llm-decision { background: #f5f3ff; color: #7c3aed; }
+  &--http-request { background: #fff1f2; color: #e11d48; }
+  &--tool { background: #fffbeb; color: #d97706; }
+  &--end { background: #f0fdfa; color: #0d9488; }
+  &--edge { background: #f1f5f9; color: #475569; }
+}
+
+.workflow-inspector-title {
+  margin: 6px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.workflow-node-id-row {
+  margin-top: 5px;
+}
+
+.workflow-node-id-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
   border: 1px solid var(--td-component-stroke);
   border-radius: 4px;
   background: var(--td-bg-color-secondarycontainer);
   color: var(--td-text-color-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 12px;
   cursor: pointer;
-  transition: border-color 160ms ease-out, color 160ms ease-out;
+  transition: all 0.16s ease;
+
+  code {
+    font-family: inherit;
+    color: var(--td-text-color-primary);
+  }
+
+  .workflow-copy-icon {
+    color: var(--td-text-color-placeholder);
+    transition: color 0.16s ease;
+  }
+
+  &:hover {
+    border-color: var(--td-brand-color);
+    color: var(--td-brand-color);
+
+    .workflow-copy-icon {
+      color: var(--td-brand-color);
+    }
+  }
 }
 
-.workflow-node-id:hover {
-  border-color: var(--td-brand-color);
-  color: var(--td-brand-color);
+/* Inspector 分组卡片 */
+.workflow-inspector-section {
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-secondarycontainer);
+
+  &--help {
+    background: transparent;
+    border-style: dashed;
+  }
 }
 
-.workflow-variable-picker {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 13px;
-}
-
-.workflow-variable-picker-label {
-  width: 100%;
-  color: var(--td-text-color-secondary);
-  font-size: 10px;
-}
-
-.workflow-variable-chip {
-  padding: 3px 8px;
-  border: 1px dashed var(--td-component-stroke);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--td-brand-color);
-  font-size: 10px;
-  cursor: pointer;
-  transition: border-color 160ms ease-out, background 160ms ease-out;
-}
-
-.workflow-variable-chip:hover:not(:disabled) {
-  border-style: solid;
-  border-color: var(--td-brand-color);
-  background: var(--td-brand-color-light);
-}
-
-.workflow-variable-chip:disabled {
-  cursor: not-allowed;
-  opacity: .5;
-}
-
-.workflow-inspector-header h3 {
-  max-width: 210px;
-  margin: 3px 0 0;
-  overflow: hidden;
-  font-size: 15px;
+.workflow-section-title {
+  font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--td-text-color-primary);
+  margin-bottom: 10px;
 }
 
 .workflow-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin-bottom: 13px;
-  font-size: 12px;
+  gap: 6px;
+  margin-bottom: 12px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
 }
 
-.workflow-field > span,
-.workflow-check-field span {
+.workflow-field-label {
+  font-size: 13px;
   font-weight: 500;
-}
-
-.workflow-field input,
-.workflow-field textarea,
-.workflow-field select,
-.workflow-condition-row input,
-.workflow-condition-row select {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 5px;
-  background: var(--td-bg-color-container);
   color: var(--td-text-color-primary);
-  font: inherit;
 }
 
-.workflow-field input,
-.workflow-field select,
-.workflow-condition-row input,
-.workflow-condition-row select {
-  height: 32px;
-  padding: 0 8px;
+.workflow-required {
+  color: var(--td-error-color);
+  font-style: normal;
+  margin-left: 2px;
 }
 
-.workflow-field textarea {
-  min-height: 72px;
-  padding: 8px;
-  resize: vertical;
-  line-height: 1.45;
-}
-
-.workflow-field select[multiple] {
-  height: 100px;
-  padding: 5px;
-}
-
-.workflow-field input:focus,
-.workflow-field textarea:focus,
-.workflow-field select:focus,
-.workflow-condition-row input:focus,
-.workflow-condition-row select:focus {
-  border-color: var(--td-brand-color);
-  outline: 2px solid color-mix(in srgb, var(--td-brand-color) 15%, transparent);
-}
-
-.workflow-field small {
+.workflow-field-help {
+  margin: 0;
   color: var(--td-text-color-secondary);
-  font-size: 10px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
+
+  code {
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--td-bg-color-container);
+    border: 1px solid var(--td-component-stroke);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--td-brand-color);
+  }
+}
+
+.workflow-field-grid {
+  display: flex;
+  gap: 10px;
 }
 
 .workflow-field--inline {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: space-between;
 }
 
-.workflow-field--inline > span {
-  align-self: center;
-}
-
-.workflow-node-type-badge {
-  display: inline-flex;
-  margin-bottom: 15px;
-  padding: 3px 7px;
-  border-radius: 4px;
-  background: var(--td-bg-color-secondarycontainer);
-  color: var(--td-text-color-secondary);
-  font-size: 10px;
-}
-
-.workflow-node-type-badge--start { color: #16855b; }
-.workflow-node-type-badge--llm { color: #0052d9; }
-.workflow-node-type-badge--end { color: #b52a25; }
-
-.workflow-node-help {
-  display: grid;
-  gap: 7px;
-  margin-bottom: 15px;
-  padding: 9px 10px;
+/* 高级输入框与文本域 */
+.workflow-input,
+.workflow-textarea {
+  box-sizing: border-box;
+  width: 100%;
   border: 1px solid var(--td-component-stroke);
   border-radius: 6px;
-  background: var(--td-bg-color-secondarycontainer);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.workflow-node-help > div {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 7px;
-}
-
-.workflow-node-help strong {
+  background: var(--td-bg-color-container);
   color: var(--td-text-color-primary);
-  font-weight: 600;
+  font: inherit;
+  font-size: 13px;
+  transition: all 0.16s ease;
+
+  &:focus {
+    border-color: var(--td-brand-color);
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--td-brand-color) 12%, transparent);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    background: var(--td-bg-color-secondarycontainer);
+    opacity: 0.6;
+  }
 }
 
-.workflow-node-help span,
-.workflow-node-help code {
-  min-width: 0;
-  color: var(--td-text-color-secondary);
-  overflow-wrap: anywhere;
+.workflow-input {
+  height: 34px;
+  padding: 0 10px;
+
+  &--small {
+    height: 30px;
+    font-size: 12px;
+  }
+}
+
+.workflow-textarea {
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+/* 提示与报警条 */
+.workflow-field-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+
+  &--error {
+    border: 1px solid color-mix(in srgb, var(--td-error-color) 30%, transparent);
+    background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
+    color: var(--td-error-color);
+  }
+
+  &--info {
+    border: 1px solid color-mix(in srgb, var(--td-brand-color) 25%, transparent);
+    background: color-mix(in srgb, var(--td-brand-color) 6%, transparent);
+    color: var(--td-text-color-secondary);
+  }
 }
 
 .workflow-resource-empty {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 5px;
-  margin-bottom: 13px;
-  padding: 10px;
+  gap: 6px;
+  padding: 12px;
   border: 1px dashed var(--td-component-stroke);
-  border-radius: 6px;
-  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 7px;
+  background: var(--td-bg-color-container);
   color: var(--td-text-color-secondary);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.workflow-resource-empty strong {
-  color: var(--td-text-color-primary);
-  font-size: 11px;
-}
-
-.workflow-field-error {
-  color: var(--td-error-color) !important;
-}
-
-/* 规则性提醒（例如认证头限制），是"提前告知"而不是"已经出错"。 */
-.workflow-field-warning {
-  color: var(--td-warning-color) !important;
-}
-
-.workflow-inspector-note {
-  margin: 12px 0;
-  padding: 10px;
-  border-left: 3px solid var(--td-brand-color);
-  background: var(--td-bg-color-secondarycontainer);
-  color: var(--td-text-color-secondary);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.workflow-check-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   font-size: 12px;
-}
 
-.workflow-check-field input {
-  accent-color: var(--td-brand-color);
-}
-
-.workflow-condition-row {
-  display: grid;
-  grid-template-columns: minmax(84px, 1.25fr) minmax(70px, .8fr) minmax(48px, .8fr) 28px;
-  gap: 5px;
-  margin-top: 8px;
-}
-
-.workflow-condition-row input,
-.workflow-condition-row select {
-  height: 29px;
-  padding: 0 5px;
-  font-size: 10px;
-}
-
-.workflow-link-button {
-  margin-top: 10px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--td-brand-color);
-  padding-left: 0;
-}
-
-.workflow-inspector-empty {
-  display: flex;
-  min-height: 180px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--td-text-color-secondary);
-  text-align: center;
-}
-
-.workflow-inspector-empty strong {
-  color: var(--td-text-color-primary);
-  font-size: 13px;
-}
-
-.workflow-inspector-empty span {
-  max-width: 180px;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.workflow-validation {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 10px;
-  padding: 9px 11px;
-  border: 1px solid color-mix(in srgb, var(--td-error-color) 35%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
-  color: var(--td-error-color);
-  font-size: 12px;
-}
-
-.workflow-validation--success {
-  border-color: color-mix(in srgb, var(--td-success-color) 35%, transparent);
-  background: color-mix(in srgb, var(--td-success-color) 8%, transparent);
-  color: var(--td-success-color);
-}
-
-.workflow-validation--error {
-  border-color: color-mix(in srgb, var(--td-error-color) 35%, transparent);
-  background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
-  color: var(--td-error-color);
-}
-
-.workflow-validation--hint {
-  border-color: color-mix(in srgb, var(--td-warning-color) 35%, transparent);
-  background: color-mix(in srgb, var(--td-warning-color) 8%, transparent);
-  color: var(--td-warning-color);
-}
-
-@media (max-width: 1180px) {
-  .workflow-layout {
-    grid-template-columns: 160px minmax(360px, 1fr) 260px;
+  strong {
+    color: var(--td-text-color-primary);
+    font-size: 13px;
   }
 }
 
-@media (max-width: 900px) {
-  .workflow-onboarding {
+.workflow-link-button {
+  border: none;
+  background: transparent;
+  color: var(--td-brand-color);
+  padding: 0;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+
+  &:hover {
+    color: var(--td-brand-color-hover);
+  }
+}
+
+/* 变量选取药丸 */
+.workflow-variable-picker {
+  margin-top: 10px;
+}
+
+.workflow-variable-picker-title {
+  display: block;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.workflow-variable-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workflow-variable-chip {
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--td-brand-color) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--td-brand-color) 6%, transparent);
+  color: var(--td-brand-color);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+
+  &:hover:not(:disabled) {
+    background: var(--td-brand-color);
+    border-color: var(--td-brand-color);
+    color: #fff;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+.workflow-code-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  margin: 2px;
+  border-radius: 4px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--td-brand-color);
+}
+
+/* 帮助参考 */
+.workflow-help-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-help-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: var(--td-brand-color);
+    background: var(--td-bg-color-container);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--td-component-stroke);
+    word-break: break-all;
+  }
+
+  span:last-child {
+    color: var(--td-text-color-secondary);
+  }
+}
+
+.workflow-help-label {
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+/* 连线配置样式 */
+.workflow-switch-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflow-switch-meta {
+  strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  small {
+    display: block;
+    margin-top: 2px;
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+}
+
+.workflow-condition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.workflow-condition-card {
+  padding: 10px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+  background: var(--td-bg-color-container);
+}
+
+.workflow-condition-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.workflow-condition-index-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--td-brand-color);
+}
+
+.workflow-icon-btn-subtle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--td-error-color);
+    background: color-mix(in srgb, var(--td-error-color) 10%, transparent);
+  }
+}
+
+.workflow-condition-row-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+/* 空状态指示 */
+.workflow-inspector-empty {
+  display: flex;
+  min-height: 240px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--td-text-color-secondary);
+  text-align: center;
+
+  strong {
+    color: var(--td-text-color-primary);
+    font-size: 14px;
+  }
+
+  p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    max-width: 220px;
+  }
+}
+
+.workflow-empty-icon-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--td-brand-color) 8%, var(--td-bg-color-secondarycontainer));
+  color: var(--td-brand-color);
+}
+
+/* 校验提示条 */
+.workflow-validation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  flex-shrink: 0;
+
+  &--success {
+    border: 1px solid color-mix(in srgb, var(--td-success-color) 30%, transparent);
+    background: color-mix(in srgb, var(--td-success-color) 8%, transparent);
+    color: var(--td-success-color);
+  }
+
+  &--error {
+    border: 1px solid color-mix(in srgb, var(--td-error-color) 30%, transparent);
+    background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
+    color: var(--td-error-color);
+  }
+
+  &--hint {
+    border: 1px solid color-mix(in srgb, var(--td-warning-color) 30%, transparent);
+    background: color-mix(in srgb, var(--td-warning-color) 8%, transparent);
+    color: var(--td-warning-color);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   模板画廊面板
+   -------------------------------------------------------------------------- */
+.workflow-templates {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding-right: 2px;
+  flex: 1;
+  min-height: 0;
+  margin-top: 12px;
+}
+
+.workflow-templates-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workflow-templates-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.workflow-templates-subtitle {
+  max-width: 68ch;
+  margin: 4px 0 0;
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.workflow-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+
+.workflow-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 10px;
+  background: var(--td-bg-color-container);
+  color: var(--td-text-color-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &:hover:not(:disabled) {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+    transform: translateY(-2px);
+  }
+
+  &--active {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 0 0 1.5px var(--td-brand-color);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+
+.workflow-template-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.workflow-template-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--td-brand-color-light);
+  color: var(--td-brand-color);
+  font-size: 16px;
+}
+
+.workflow-template-heading {
+  strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  small {
+    display: block;
+    margin-top: 3px;
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+}
+
+.workflow-template-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: workflow-template-step;
+
+  li {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--td-bg-color-secondarycontainer);
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+    counter-increment: workflow-template-step;
+
+    &::before {
+      content: counter(workflow-template-step);
+      color: var(--td-brand-color);
+      font-weight: 600;
+    }
+
+    & + li::before {
+      content: '→';
+      margin-right: 2px;
+      color: var(--td-text-color-placeholder);
+      font-weight: 400;
+    }
+  }
+}
+
+.workflow-template-detail {
+  margin: 0;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.workflow-template-needs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.workflow-template-needs-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--td-warning-color);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-template-need {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--td-warning-color-light);
+  color: var(--td-warning-color-8);
+  font-size: 12px;
+}
+
+.workflow-template-action {
+  color: var(--td-brand-color);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   响应式断点适配
+   -------------------------------------------------------------------------- */
+@media (max-width: 1280px) {
+  .workflow-layout {
+    grid-template-columns: 200px minmax(360px, 1fr) 340px;
+  }
+}
+
+@media (max-width: 960px) {
+  .workflow-onboarding-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .workflow-layout {
-    grid-template-columns: 150px minmax(300px, 1fr);
+    grid-template-columns: 180px minmax(280px, 1fr);
   }
 
   .workflow-inspector {
@@ -2823,52 +3911,41 @@ defineExpose({
     right: 12px;
     bottom: 12px;
     z-index: 5;
-    width: 260px;
-    max-height: 70%;
+    width: 320px;
+    max-height: 75%;
     border: 1px solid var(--td-component-stroke);
-    box-shadow: 0 8px 24px rgba(15, 23, 42, .16);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 680px) {
   .workflow-toolbar {
+    flex-direction: column;
     align-items: flex-start;
   }
 
   .workflow-toolbar-actions {
+    width: 100%;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
 
-  .workflow-onboarding {
+  .workflow-onboarding-grid {
     grid-template-columns: 1fr;
   }
 
   .workflow-layout {
     display: block;
-    overflow: visible;
   }
 
   .workflow-palette {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-    border-right: 0;
+    border-right: none;
     border-bottom: 1px solid var(--td-component-stroke);
   }
 
-  .workflow-panel-heading,
-  .workflow-panel-hint,
-  .workflow-legend {
-    grid-column: 1 / -1;
-  }
-
-  .workflow-palette-item {
-    margin-top: 0;
-  }
-
-  .workflow-canvas {
-    min-height: 440px;
+  .workflow-palette-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .workflow-inspector {
@@ -2876,7 +3953,7 @@ defineExpose({
     width: auto;
     max-height: none;
     border-top: 1px solid var(--td-component-stroke);
-    border-left: 0;
+    border-left: none;
     box-shadow: none;
   }
 }

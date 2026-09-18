@@ -61,6 +61,8 @@ export interface WorkflowEdge {
   id: string;
   source: string;
   target: string;
+  source_handle?: string;
+  target_handle?: string;
   order: number;
   is_default: boolean;
   condition?: WorkflowCondition;

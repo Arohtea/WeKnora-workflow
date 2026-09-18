@@ -65,6 +65,8 @@ interface EdgeSpec {
   id: string;
   source: string;
   target: string;
+  source_handle?: string;
+  target_handle?: string;
   order?: number;
   is_default?: boolean;
   condition?: WorkflowDefinition['edges'][number]['condition'];
@@ -85,6 +87,8 @@ function buildEdge(spec: EdgeSpec): WorkflowEdge {
     id: spec.id,
     source: spec.source,
     target: spec.target,
+    source_handle: spec.source_handle,
+    target_handle: spec.target_handle,
     order: spec.order ?? 0,
     is_default: spec.is_default ?? false,
     ...(spec.condition ? { condition: spec.condition } : {}),

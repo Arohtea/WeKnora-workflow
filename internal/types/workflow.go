@@ -53,12 +53,14 @@ type WorkflowNode struct {
 
 // WorkflowEdge 描述两个节点间的确定性有向连接和可选路由条件。
 type WorkflowEdge struct {
-	ID        string             `yaml:"id" json:"id"`
-	Source    string             `yaml:"source" json:"source"`
-	Target    string             `yaml:"target" json:"target"`
-	Order     int                `yaml:"order" json:"order"`
-	IsDefault bool               `yaml:"is_default" json:"is_default"`
-	Condition *WorkflowCondition `yaml:"condition,omitempty" json:"condition,omitempty"`
+	ID           string             `yaml:"id" json:"id"`
+	Source       string             `yaml:"source" json:"source"`
+	Target       string             `yaml:"target" json:"target"`
+	SourceHandle string             `yaml:"source_handle,omitempty" json:"source_handle,omitempty"`
+	TargetHandle string             `yaml:"target_handle,omitempty" json:"target_handle,omitempty"`
+	Order        int                `yaml:"order" json:"order"`
+	IsDefault    bool               `yaml:"is_default" json:"is_default"`
+	Condition    *WorkflowCondition `yaml:"condition,omitempty" json:"condition,omitempty"`
 }
 
 // WorkflowCondition 是不向用户暴露 CEL 文本的平铺条件组。

@@ -5212,10 +5212,10 @@ const handleSave = async (): Promise<boolean> => {
 }
 
 .settings-modal--workflow {
-  width: 96vw;
-  max-width: 1500px;
-  height: 92vh;
-  max-height: 900px;
+  width: 98vw;
+  max-width: 1820px;
+  height: 96vh;
+  max-height: 1040px;
 }
 
 .editor-initializing {
@@ -5484,7 +5484,8 @@ const handleSave = async (): Promise<boolean> => {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 24px 28px 28px;
+    padding: 16px 20px 20px;
+    height: 100%;
   }
 }
 
