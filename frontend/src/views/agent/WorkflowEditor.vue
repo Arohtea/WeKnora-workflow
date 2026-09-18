@@ -66,15 +66,6 @@
           <t-icon name="check-circle" />
           <span>校验</span>
         </button>
-        <button
-          type="button"
-          class="workflow-toolbar-btn workflow-toolbar-btn--primary"
-          :disabled="disabled"
-          @click="emit('run')"
-        >
-          <t-icon name="play-circle" />
-          <span>保存并试用</span>
-        </button>
       </div>
     </div>
 
@@ -188,6 +179,7 @@
         :class="{ 'workflow-canvas--disabled': disabled }"
         data-guide="workflow-canvas"
         @dragover.prevent
+        @dragenter.prevent
         @drop="onCanvasDrop"
       >
         <VueFlow
@@ -204,6 +196,7 @@
           :default-edge-options="{ type: 'smoothstep', animated: false, markerEnd: MarkerType.ArrowClosed }"
           @connect="onConnect"
           @node-click="onNodeClick"
+          @node-drag-start="onNodeDragStart"
           @node-drag-stop="onNodeDragStop"
           @edge-click="onEdgeClick"
           @pane-click="clearSelection"
@@ -290,11 +283,11 @@
                 <button
                   type="button"
                   class="workflow-node-id-chip"
-                  title="点击复制下游引用变量"
+                  :title="`点击复制下游标准引用变量 ${primaryVariableForSelectedNode}`"
                   @click="copyNodeVariable(selectedNode.id)"
                 >
                   <t-icon name="code" size="12px" />
-                  <code>nodes.{{ selectedNode.id }}</code>
+                  <code>{{ primaryVariableForSelectedNode }}</code>
                   <t-icon name="copy" size="12px" class="workflow-copy-icon" />
                 </button>
               </div>
@@ -373,6 +366,22 @@
                   @input="updateConfig('query_template', inputValue($event))"
                 />
                 <small class="workflow-field-help">默认使用提问变量 <code>&#123;&#123;input.query&#125;&#125;</code>，也可拼接上下文。</small>
+                <div v-if="quickUpstreamVariableOptions.length" class="workflow-variable-picker">
+                  <span class="workflow-variable-picker-title">快捷插入变量：</span>
+                  <div class="workflow-variable-chips">
+                    <button
+                      v-for="opt in quickUpstreamVariableOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="workflow-variable-chip"
+                      :disabled="disabled"
+                      :title="opt.hint"
+                      @click="appendTemplateVariable('query_template', opt.value)"
+                    >
+                      + {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div class="workflow-field workflow-field--inline">
@@ -406,6 +415,22 @@
                   @input="updateConfig('system_prompt', inputValue($event))"
                 />
                 <small class="workflow-field-help">可选，用于定义大模型的全局角色、专业视角与输出规范。</small>
+                <div v-if="quickUpstreamVariableOptions.length" class="workflow-variable-picker">
+                  <span class="workflow-variable-picker-title">快捷插入变量：</span>
+                  <div class="workflow-variable-chips">
+                    <button
+                      v-for="opt in quickUpstreamVariableOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="workflow-variable-chip"
+                      :disabled="disabled"
+                      :title="opt.hint"
+                      @click="appendTemplateVariable('system_prompt', opt.value)"
+                    >
+                      + {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div class="workflow-field">
@@ -419,8 +444,24 @@
                   @input="updateConfig('prompt', inputValue($event))"
                 />
                 <small class="workflow-field-help">
-                  支持使用 <code>&#123;&#123;input.query&#125;&#125;</code> 或 <code>&#123;&#123;nodes.节点ID.xxx&#125;&#125;</code>；生成文本可通过 <code>nodes.{{ selectedNode.id }}.text</code> 供下游引用。
+                  支持使用 <code>&#123;&#123;input.query&#125;&#125;</code> 或上游节点输出 <code>&#123;&#123;nodes.&lt;节点ID&gt;.text&#125;&#125;</code>。
                 </small>
+                <div v-if="quickUpstreamVariableOptions.length" class="workflow-variable-picker">
+                  <span class="workflow-variable-picker-title">快捷插入上游变量：</span>
+                  <div class="workflow-variable-chips">
+                    <button
+                      v-for="opt in quickUpstreamVariableOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="workflow-variable-chip"
+                      :disabled="disabled"
+                      :title="opt.hint"
+                      @click="appendTemplateVariable('prompt', opt.value)"
+                    >
+                      + {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div class="workflow-field-grid">
@@ -469,6 +510,22 @@
                   placeholder="请根据 {{input.query}} 判断意图并返回以下候选之一..."
                   @input="updateConfig('prompt', inputValue($event))"
                 />
+                <div v-if="quickUpstreamVariableOptions.length" class="workflow-variable-picker">
+                  <span class="workflow-variable-picker-title">快捷插入变量：</span>
+                  <div class="workflow-variable-chips">
+                    <button
+                      v-for="opt in quickUpstreamVariableOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="workflow-variable-chip"
+                      :disabled="disabled"
+                      :title="opt.hint"
+                      @click="appendTemplateVariable('prompt', opt.value)"
+                    >
+                      + {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="workflow-field">
                 <span class="workflow-field-label">候选分支标签 <em class="workflow-required">*</em></span>
@@ -543,6 +600,22 @@
                   placeholder='{"query":"{{input.query}}"}'
                   @input="updateConfig('body_template', inputValue($event))"
                 />
+                <div v-if="quickUpstreamVariableOptions.length" class="workflow-variable-picker">
+                  <span class="workflow-variable-picker-title">快捷插入变量：</span>
+                  <div class="workflow-variable-chips">
+                    <button
+                      v-for="opt in quickUpstreamVariableOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="workflow-variable-chip"
+                      :disabled="disabled"
+                      :title="opt.hint"
+                      @click="appendTemplateVariable('body_template', opt.value)"
+                    >
+                      + {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
@@ -581,13 +654,13 @@
                   @change="updateConfig('tool_name', String($event || ''))"
                 >
                   <t-option
-                    v-for="tool in builtinTools"
+                    v-for="tool in formattedBuiltinTools"
                     :key="tool.name"
                     :value="tool.name"
-                    :label="tool.display_name || tool.name"
+                    :label="tool.label"
                   />
                 </t-select>
-                <small v-if="selectedBuiltinTool?.description" class="workflow-field-help">{{ selectedBuiltinTool.description }}</small>
+                <small v-if="selectedBuiltinToolHelp" class="workflow-field-help">{{ selectedBuiltinToolHelp }}</small>
               </div>
 
               <template v-else-if="toolKind === 'mcp'">
@@ -709,6 +782,22 @@
                   placeholder="请根据 {{input.query}} 完成具体任务并返回可交付成果。"
                   @input="updateConfig('task_template', inputValue($event))"
                 />
+                <div v-if="quickUpstreamVariableOptions.length" class="workflow-variable-picker">
+                  <span class="workflow-variable-picker-title">快捷插入变量：</span>
+                  <div class="workflow-variable-chips">
+                    <button
+                      v-for="opt in quickUpstreamVariableOptions"
+                      :key="opt.value"
+                      type="button"
+                      class="workflow-variable-chip"
+                      :disabled="disabled"
+                      :title="opt.hint"
+                      @click="appendTemplateVariable('task_template', opt.value)"
+                    >
+                      + {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
@@ -752,21 +841,70 @@
           <div v-if="selectedNode.data.workflowType === 'start'" class="workflow-inspector-section">
             <div class="workflow-field-alert workflow-field-alert--info">
               <t-icon name="info-circle" />
-              <span>流程入口节点。下游节点可通过 <code>input.query</code> 获取用户提问，通过 <code>input.attachments_text</code> 读取附件提取文本。</span>
+              <span>流程入口节点。下游节点可通过 <code>&#123;&#123;input.query&#125;&#125;</code> 获取用户提问，通过 <code>&#123;&#123;input.attachments_text&#125;&#125;</code> 读取附件提取文本。</span>
             </div>
           </div>
 
-          <!-- 输出与变量参考 -->
-          <div v-if="selectedNode.data.workflowType !== 'start'" class="workflow-inspector-section workflow-inspector-section--help">
-            <div class="workflow-section-title">输出与变量参考</div>
-            <div class="workflow-help-grid">
-              <div class="workflow-help-item">
-                <span class="workflow-help-label">下游引用变量：</span>
-                <code>{{ selectedNodeHelp.variables }}</code>
-              </div>
-              <div class="workflow-help-item">
-                <span class="workflow-help-label">输出属性说明：</span>
-                <span>{{ selectedNodeHelp.output }}</span>
+          <!-- 当前步骤输出与下游引用规范 -->
+          <div class="workflow-inspector-section workflow-inspector-section--help">
+            <div class="workflow-section-title">
+              <span>当前步骤输出与下游引用</span>
+            </div>
+            <small class="workflow-field-help" style="margin-bottom: 8px; display: block;">
+              下游步骤（提示词、文本模板或分支连线）可引用的当前步骤参数规范：
+            </small>
+            <div class="workflow-output-cards">
+              <div
+                v-for="field in selectedNodeOutputFields"
+                :key="field.fullPath"
+                class="workflow-output-card"
+              >
+                <div class="workflow-output-card-top">
+                  <div class="workflow-output-card-meta">
+                    <strong class="workflow-output-card-label">{{ field.label }}</strong>
+                    <span class="workflow-type-badge">{{ field.type }}</span>
+                    <span v-if="field.isPrimary" class="workflow-primary-tag">主要输出</span>
+                  </div>
+                </div>
+                <div class="workflow-output-card-desc">{{ field.desc }}</div>
+                <div class="workflow-output-card-codes">
+                  <div class="workflow-code-row">
+                    <span class="workflow-code-row-title">模板语法：</span>
+                    <code
+                      class="workflow-clickable-code"
+                      title="点击复制模板变量"
+                      @click="copyVariableText(field.templateSyntax, `已复制模板变量 ${field.templateSyntax}`)"
+                    >
+                      {{ field.templateSyntax }}
+                    </code>
+                    <button
+                      type="button"
+                      class="workflow-copy-mini-btn"
+                      title="复制模板语法"
+                      @click="copyVariableText(field.templateSyntax, `已复制模板变量 ${field.templateSyntax}`)"
+                    >
+                      <t-icon name="copy" size="12px" />
+                    </button>
+                  </div>
+                  <div class="workflow-code-row">
+                    <span class="workflow-code-row-title">条件路径：</span>
+                    <code
+                      class="workflow-clickable-code"
+                      title="点击复制条件路径"
+                      @click="copyVariableText(field.fullPath, `已复制条件路径 ${field.fullPath}`)"
+                    >
+                      {{ field.fullPath }}
+                    </code>
+                    <button
+                      type="button"
+                      class="workflow-copy-mini-btn"
+                      title="复制条件路径"
+                      @click="copyVariableText(field.fullPath, `已复制条件路径 ${field.fullPath}`)"
+                    >
+                      <t-icon name="copy" size="12px" />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -843,7 +981,12 @@
                       placeholder="判断变量"
                       @change="updateConditionItem(index, 'variable', String($event))"
                     >
-                      <t-option v-for="variable in variableOptions" :key="variable" :value="variable" :label="variable" />
+                      <t-option
+                        v-for="opt in currentEdgeVariableOptions"
+                        :key="opt.value"
+                        :value="opt.value"
+                        :label="opt.label"
+                      />
                     </t-select>
                     <t-select
                       :value="item.operator"
@@ -862,6 +1005,22 @@
                     placeholder="目标比较值..."
                     @input="updateConditionItem(index, 'value', inputValue($event))"
                   />
+                  <div v-if="edgeSourceDecisionChoices.length" class="workflow-quick-choices">
+                    <span class="workflow-quick-choices-title">快捷填入分支标签：</span>
+                    <div class="workflow-quick-choice-chips">
+                      <button
+                        v-for="choice in edgeSourceDecisionChoices"
+                        :key="choice"
+                        type="button"
+                        class="workflow-quick-choice-chip"
+                        :disabled="disabled"
+                        :title="`点击填入比较值：${choice}`"
+                        @click="updateConditionItem(index, 'value', choice)"
+                      >
+                        {{ choice }}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -972,7 +1131,7 @@ const onboardingSteps = [
   { title: '选一个模板', description: '最接近你需求的流程，会自动连线。' },
   { title: '补齐待配置项', description: '按右侧提示换成自己的知识库或接口。' },
   { title: '改节点文字', description: '把名称改成同事看得懂的说法。' },
-  { title: '校验并去试用', description: '校验通过后保存，会自动打开对话让你问一句。' },
+  { title: '校验与保存', description: '校验通过后，可点击底部“保存并试用”立即前往对话体验，或点击“保存并关闭”。' },
 ];
 
 const nodePalette: Array<{ type: WorkflowNodeType; label: string; description: string; icon: string }> = [
@@ -1041,7 +1200,7 @@ const templateGalleryOpen = ref<boolean | null>(null);
 const appliedTemplateId = ref('');
 let lastEmitted = '';
 
-const { fitView } = useVueFlow();
+const { fitView, screenToFlowCoordinate } = useVueFlow();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
@@ -1150,9 +1309,16 @@ function loadDefinition(value?: WorkflowDefinition | null) {
   }));
   selectedNodeId.value = '';
   selectedEdgeId.value = '';
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer);
+    snapshotDebounceTimer = null;
+  }
   undoStack.value = [];
   redoStack.value = [];
-  applyingModel.value = false;
+  lastEmitted = JSON.stringify(toDefinition());
+  nextTick(() => {
+    applyingModel.value = false;
+  });
 }
 
 function toDefinition(): WorkflowDefinition {
@@ -1190,7 +1356,7 @@ function emitDefinition() {
   lastEmitted = JSON.stringify(next);
   emit('update:modelValue', next);
   if (!isHistoryApplying.value) {
-    pushSnapshotDebounced();
+    pushSnapshotDebounced(800);
   }
 }
 
@@ -1220,6 +1386,10 @@ function captureCurrentSnapshot(): string {
 /** 记录一个立即可撤回的快照 */
 function pushSnapshot() {
   if (isHistoryApplying.value || applyingModel.value || props.disabled) return;
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer);
+    snapshotDebounceTimer = null;
+  }
   const current = captureCurrentSnapshot();
   const last = undoStack.value[undoStack.value.length - 1];
   if (last === current) return;
@@ -1233,7 +1403,7 @@ function pushSnapshot() {
 }
 
 let snapshotDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-function pushSnapshotDebounced(delay = 500) {
+function pushSnapshotDebounced(delay = 800) {
   if (isHistoryApplying.value || applyingModel.value || props.disabled) return;
   if (snapshotDebounceTimer) {
     clearTimeout(snapshotDebounceTimer);
@@ -1246,8 +1416,12 @@ function pushSnapshotDebounced(delay = 500) {
 /** 从历史快照精准恢复节点与连线 */
 function restoreSnapshot(snapshotStr: string) {
   try {
-    const snapshot = JSON.parse(snapshotStr);
     isHistoryApplying.value = true;
+    if (snapshotDebounceTimer) {
+      clearTimeout(snapshotDebounceTimer);
+      snapshotDebounceTimer = null;
+    }
+    const snapshot = JSON.parse(snapshotStr);
     flowNodes.value = (snapshot.nodes || []).map((node: any): EditorNode => ({
       id: node.id,
       type: 'default',
@@ -1278,9 +1452,11 @@ function restoreSnapshot(snapshotStr: string) {
     }));
     clearSelection();
   } finally {
+    const next = toDefinition();
+    lastEmitted = JSON.stringify(next);
+    emit('update:modelValue', next);
     nextTick(() => {
       isHistoryApplying.value = false;
-      emitDefinition();
     });
   }
 }
@@ -1288,8 +1464,23 @@ function restoreSnapshot(snapshotStr: string) {
 /** 执行撤回 */
 function undo() {
   if (!canUndo.value || props.disabled) return;
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer);
+    snapshotDebounceTimer = null;
+  }
+
   const current = captureCurrentSnapshot();
-  const previous = undoStack.value.pop();
+
+  // 关键：持续出栈与当前状态相同的快照，直到定位到最近一个真正有变化的历史状态
+  let previous: string | undefined;
+  while (undoStack.value.length > 0) {
+    const candidate = undoStack.value.pop();
+    if (candidate && candidate !== current) {
+      previous = candidate;
+      break;
+    }
+  }
+
   if (previous) {
     redoStack.value.push(current);
     restoreSnapshot(previous);
@@ -1300,8 +1491,23 @@ function undo() {
 /** 执行重做 */
 function redo() {
   if (!canRedo.value || props.disabled) return;
+  if (snapshotDebounceTimer) {
+    clearTimeout(snapshotDebounceTimer);
+    snapshotDebounceTimer = null;
+  }
+
   const current = captureCurrentSnapshot();
-  const next = redoStack.value.pop();
+
+  // 关键：持续出栈与当前状态相同的快照，直到定位到真正有变化的状态
+  let next: string | undefined;
+  while (redoStack.value.length > 0) {
+    const candidate = redoStack.value.pop();
+    if (candidate && candidate !== current) {
+      next = candidate;
+      break;
+    }
+  }
+
   if (next) {
     undoStack.value.push(current);
     restoreSnapshot(next);
@@ -1309,9 +1515,14 @@ function redo() {
   }
 }
 
-/** 节点拖拽移动停止时记录快照 */
-function onNodeDragStop() {
+/** 节点拖拽移动开始：记录拖拽前的位置快照 */
+function onNodeDragStart() {
+  if (props.disabled) return;
   pushSnapshot();
+}
+
+/** 节点拖拽移动停止时通知外部保存 */
+function onNodeDragStop() {
   emitDefinition();
 }
 
@@ -1412,9 +1623,68 @@ const httpHeadersText = computed(
 const toolArgumentsText = computed(
   () => toolArgumentsRaw.value ?? JSON.stringify(selectedNodeConfig.value.arguments || {}, null, 2),
 );
+const BUILTIN_TOOL_METADATA: Record<string, { label: string; desc: string }> = {
+  web_search: { label: '网络搜索', desc: '在互联网上搜索最新公开信息，适合补充实时数据' },
+  web_fetch: { label: '网页抓取', desc: '抓取并提取指定网页的正文文本内容' },
+  database_query: { label: '数据库查询', desc: '在配置的关联数据库中执行只读 SQL 查询并返回表格数据' },
+  data_analysis: { label: '数据分析', desc: '统计和分析表格、CSV或结构化数据' },
+  data_schema: { label: '数据结构元信息', desc: '查看数据库或数据表的元结构与字段信息' },
+  wiki_search: { label: 'Wiki 搜索', desc: '在 Wiki 知识库中按关键词与语义检索页面' },
+  wiki_read_page: { label: 'Wiki 页面阅读', desc: '读取指定 Wiki 页面的完整内容' },
+  wiki_read_source_doc: { label: '精读源文档', desc: '深入阅读 Wiki 页面背后的原始源文档' },
+  wiki_read_issue: { label: '查看 Wiki 问题', desc: '查看特定 Wiki 页面上标记的事实或冲突问题' },
+  wiki_flag_issue: { label: '标记 Wiki 问题', desc: '标记页面中存在的事实错误或合并冲突问题' },
+  wiki_write_page: { label: '创建/覆盖 Wiki', desc: '创建新页面或完全覆盖已有 Wiki 页面' },
+  wiki_replace_text: { label: '局部替换 Wiki', desc: '替换 Wiki 页面中的特定文本' },
+  wiki_rename_page: { label: '重命名 Wiki', desc: '重命名 Wiki 页面并自动更新关联链接' },
+  wiki_delete_page: { label: '删除 Wiki', desc: '删除 Wiki 页面并自动清理关联死链' },
+  wiki_update_issue: { label: '更新 Wiki 问题', desc: '更新 Wiki 页面问题的处理状态' },
+  search_conversations: { label: '搜索历史会话', desc: '检索过去的对话记录与用户提问' },
+  search_memory: { label: '检索长期记忆', desc: '查找当前用户的长期记忆与个人偏好' },
+  grep_chunks: { label: '关键词搜索', desc: '在知识库切片中进行精准全文匹配' },
+  knowledge_search: { label: '知识库语义检索', desc: '基于向量语义在知识库中匹配相关片段' },
+  list_knowledge_chunks: { label: '查看知识切片', desc: '按序浏览或检索知识文档切片清单' },
+  query_knowledge_graph: { label: '查询知识图谱', desc: '查询知识库构建的实体与关系图谱' },
+  get_document_info: { label: '获取文档信息', desc: '查看知识库中原始文档的元数据' },
+  todo_write: { label: '计划管理', desc: '维护多步任务的待办清单与完成状态' },
+  thinking: { label: '深度思考', desc: '输出推理与分析过程' },
+};
+
+function getBuiltinToolLabel(name?: string): string {
+  if (!name) return '未配置工具';
+  const fromCatalog = builtinTools.value.find((t) => t.name === name);
+  if (fromCatalog?.display_name && fromCatalog.display_name !== fromCatalog.name) {
+    return fromCatalog.display_name;
+  }
+  return BUILTIN_TOOL_METADATA[name]?.label || name;
+}
+
+const formattedBuiltinTools = computed(() => {
+  return builtinTools.value.map((tool) => {
+    const meta = BUILTIN_TOOL_METADATA[tool.name];
+    const friendly = (tool.display_name && tool.display_name !== tool.name)
+      ? tool.display_name
+      : (meta?.label || tool.name);
+    const label = friendly !== tool.name ? `${friendly} (${tool.name})` : tool.name;
+    return {
+      name: tool.name,
+      label,
+      friendly,
+      description: tool.description || meta?.desc || '',
+    };
+  });
+});
+
 const selectedBuiltinTool = computed<WorkflowCatalogTool | undefined>(() =>
   builtinTools.value.find((tool) => tool.name === configString('tool_name')),
 );
+
+const selectedBuiltinToolHelp = computed(() => {
+  if (!selectedBuiltinTool.value) return '';
+  const meta = BUILTIN_TOOL_METADATA[selectedBuiltinTool.value.name];
+  return selectedBuiltinTool.value.description || meta?.desc || '';
+});
+
 const selectedMCPService = computed<WorkflowCatalogService | undefined>(() =>
   mcpServices.value.find((service) => service.id === configString('service_id')),
 );
@@ -1484,56 +1754,261 @@ const isPlaceholderFlow = computed(() => {
   return !!start && !!end && edge.source === start.id && edge.target === end.id;
 });
 
-const selectedNodeHelp = computed(() => {
-  const type = selectedNode.value?.data.workflowType as WorkflowNodeType | undefined;
-  const keyByType: Record<WorkflowNodeType, string> = {
-    start: 'start',
-    llm: 'llm',
-    'knowledge-retrieval': 'retrieval',
-    'llm-decision': 'decision',
-    'http-request': 'http',
-    tool: 'tool',
-    end: 'end',
-  };
-  const key = type ? keyByType[type] : 'start';
-  const help: Record<string, { required: string; variables: string; output: string }> = {
-    start: {
-      required: '无需配置',
-      variables: 'input.query / input.attachments_text',
-      output: '把用户输入传给后续节点。',
-    },
-    llm: {
-      required: '提示词',
-      variables: '{{input.query}}',
-      output: 'text 是大模型生成的完整文本，供下游节点或输出节点引用。',
-    },
-    retrieval: {
-      required: '知识库、查询模板、召回数量',
-      variables: '{{input.query}}',
-      output: 'text 是检索到的内容，会作为回答依据；data.count 是命中条数。',
-    },
-    decision: {
-      required: '判断提示词、至少两个候选标签',
-      variables: '{{input.query}}',
-      output: 'data.choice 是模型选中的那个标签，可用来决定走哪个分支。',
-    },
-    http: {
-      required: '请求方法、HTTP/HTTPS URL',
-      variables: '{{input.query}}',
-      output: 'data.status_code、data.body 和 data.json 是接口返回的内容。',
-    },
-    tool: {
-      required: '工具类型及对应资源；Skill 还需任务模板',
-      variables: '{{input.query}}',
-      output: 'text 是工具返回的结果，可直接作为后续步骤的输入。',
-    },
-    end: {
-      required: '最终输出模板可留空',
-      variables: '{{input.query}}',
-      output: '作为工作流的最终回复返回给用户。',
-    },
-  };
-  return help[key];
+/** 节点输出字段元数据定义，严格对应后端 types.WorkflowNodeOutput 结构 */
+interface WorkflowOutputFieldMeta {
+  key: string;              // 简短字段名，如 'text', 'count', 'choice'
+  fullPath: string;         // 变量路径，如 'nodes.retrieval-1.data.count' 或 'input.query'
+  templateSyntax: string;   // 模板插入表达式，如 '{{nodes.retrieval-1.data.count}}'
+  label: string;            // 人性化中文标签
+  type: string;             // 数据类型：string | number | boolean | object
+  desc: string;             // 字段详细业务含义及引用规范
+  isPrimary?: boolean;      // 是否为该节点的主文本输出
+}
+
+/** 快捷插入变量选项 */
+interface QuickVariableOption {
+  label: string;
+  value: string;
+  hint: string;
+  type: string;
+  isPrimary?: boolean;
+}
+
+/**
+ * 获取指定节点的全部标准输出字段清单。
+ * 字段路径与后端 runtime.go 的 workflowTemplateRE 与 nodeVariableRE 完全一致。
+ */
+function getNodeOutputFields(node: EditorNode | WorkflowNode | { id: string; data?: { workflowType?: string; name?: string }; type?: string; name?: string }): WorkflowOutputFieldMeta[] {
+  const nodeId = node.id;
+  const workflowType = (('data' in node && node.data?.workflowType) || ('type' in node && node.type) || '') as WorkflowNodeType;
+
+  if (workflowType === 'start') {
+    return [
+      {
+        key: 'query',
+        fullPath: 'input.query',
+        templateSyntax: '{{input.query}}',
+        label: '用户提问文本',
+        type: 'string',
+        desc: '当前对话轮次用户输入的原始问题文本',
+        isPrimary: true,
+      },
+      {
+        key: 'attachments_text',
+        fullPath: 'input.attachments_text',
+        templateSyntax: '{{input.attachments_text}}',
+        label: '附件提取文本',
+        type: 'string',
+        desc: '用户上传的文档或附件解析出的全文文本',
+      },
+    ];
+  }
+
+  if (workflowType === 'knowledge-retrieval') {
+    return [
+      {
+        key: 'text',
+        fullPath: `nodes.${nodeId}.text`,
+        templateSyntax: `{{nodes.${nodeId}.text}}`,
+        label: '检索片段文本',
+        type: 'string',
+        desc: '知识库中召回并合并后的文档切片内容，供大模型作为参考上下文',
+        isPrimary: true,
+      },
+      {
+        key: 'count',
+        fullPath: `nodes.${nodeId}.data.count`,
+        templateSyntax: `{{nodes.${nodeId}.data.count}}`,
+        label: '切片命中数',
+        type: 'number',
+        desc: '实际召回命中的知识切片总数量，可用于连线分支判断 count > 0',
+      },
+      {
+        key: 'status',
+        fullPath: `nodes.${nodeId}.status`,
+        templateSyntax: `{{nodes.${nodeId}.status}}`,
+        label: '执行状态',
+        type: 'string',
+        desc: '节点运行状态："success" 或 "failed"',
+      },
+    ];
+  }
+
+  if (workflowType === 'llm') {
+    return [
+      {
+        key: 'text',
+        fullPath: `nodes.${nodeId}.text`,
+        templateSyntax: `{{nodes.${nodeId}.text}}`,
+        label: '模型生成文本',
+        type: 'string',
+        desc: '大模型推理后生成的完整回答文本，可供下游步骤或最终输出引用',
+        isPrimary: true,
+      },
+      {
+        key: 'reasoning_content',
+        fullPath: `nodes.${nodeId}.data.reasoning_content`,
+        templateSyntax: `{{nodes.${nodeId}.data.reasoning_content}}`,
+        label: '思维链推理过程',
+        type: 'string',
+        desc: '深度思考模型（如 DeepSeek-R1）输出的思考过程文本',
+      },
+      {
+        key: 'status',
+        fullPath: `nodes.${nodeId}.status`,
+        templateSyntax: `{{nodes.${nodeId}.status}}`,
+        label: '执行状态',
+        type: 'string',
+        desc: '节点运行状态："success" 或 "failed"',
+      },
+    ];
+  }
+
+  if (workflowType === 'llm-decision') {
+    return [
+      {
+        key: 'choice',
+        fullPath: `nodes.${nodeId}.data.choice`,
+        templateSyntax: `{{nodes.${nodeId}.data.choice}}`,
+        label: '分支决策标签',
+        type: 'string',
+        desc: '大模型意图判定命中的分支标签名，用于边条件的分支路由匹配',
+        isPrimary: true,
+      },
+      {
+        key: 'text',
+        fullPath: `nodes.${nodeId}.text`,
+        templateSyntax: `{{nodes.${nodeId}.text}}`,
+        label: '决策输出文本',
+        type: 'string',
+        desc: '同 data.choice，大模型选中的分支标签名',
+      },
+      {
+        key: 'reason',
+        fullPath: `nodes.${nodeId}.data.reason`,
+        templateSyntax: `{{nodes.${nodeId}.data.reason}}`,
+        label: '判定简要理由',
+        type: 'string',
+        desc: '大模型做出该分支判定的简要理由分析',
+      },
+      {
+        key: 'status',
+        fullPath: `nodes.${nodeId}.status`,
+        templateSyntax: `{{nodes.${nodeId}.status}}`,
+        label: '执行状态',
+        type: 'string',
+        desc: '节点运行状态："success" 或 "failed"',
+      },
+    ];
+  }
+
+  if (workflowType === 'http-request') {
+    return [
+      {
+        key: 'text',
+        fullPath: `nodes.${nodeId}.text`,
+        templateSyntax: `{{nodes.${nodeId}.text}}`,
+        label: '响应正文文本',
+        type: 'string',
+        desc: 'HTTP 接口返回的原始文本内容（同 data.body）',
+        isPrimary: true,
+      },
+      {
+        key: 'status_code',
+        fullPath: `nodes.${nodeId}.data.status_code`,
+        templateSyntax: `{{nodes.${nodeId}.data.status_code}}`,
+        label: 'HTTP 状态码',
+        type: 'number',
+        desc: '接口返回的状态码（如 200, 404, 500），常用于分支条件路由',
+      },
+      {
+        key: 'body',
+        fullPath: `nodes.${nodeId}.data.body`,
+        templateSyntax: `{{nodes.${nodeId}.data.body}}`,
+        label: '原始响应体 (body)',
+        type: 'string',
+        desc: '接口返回的原始字符串响应体',
+      },
+      {
+        key: 'json',
+        fullPath: `nodes.${nodeId}.data.json`,
+        templateSyntax: `{{nodes.${nodeId}.data.json}}`,
+        label: '解析后 JSON 对象',
+        type: 'object',
+        desc: '若接口返回 JSON，下游可通过 nodes.<节点ID>.data.json.<属性> 读取子字段',
+      },
+      {
+        key: 'status',
+        fullPath: `nodes.${nodeId}.status`,
+        templateSyntax: `{{nodes.${nodeId}.status}}`,
+        label: '请求执行状态',
+        type: 'string',
+        desc: 'HTTP 状态码处于 2xx 时为 "success"，其余为 "failed"',
+      },
+    ];
+  }
+
+  if (workflowType === 'tool') {
+    const config = ('data' in node ? node.data?.config : {}) || {};
+    const toolName = (config.tool_name as string) || '';
+    const friendlyTool = config.kind === 'builtin'
+      ? getBuiltinToolLabel(toolName)
+      : (config.kind === 'mcp' ? (toolName || 'MCP') : ((config.skill_name as string) || '沙箱技能'));
+    const suffix = friendlyTool && friendlyTool !== '未配置工具' ? ` · ${friendlyTool}` : '';
+    return [
+      {
+        key: 'text',
+        fullPath: `nodes.${nodeId}.text`,
+        templateSyntax: `{{nodes.${nodeId}.text}}`,
+        label: `工具输出结果${suffix}`,
+        type: 'string',
+        desc: `${friendlyTool || '工具'}执行完毕后返回的文本输出，可供下游步骤或最终输出引用`,
+        isPrimary: true,
+      },
+      {
+        key: 'status',
+        fullPath: `nodes.${nodeId}.status`,
+        templateSyntax: `{{nodes.${nodeId}.status}}`,
+        label: `工具执行状态${suffix}`,
+        type: 'string',
+        desc: '工具调用成功为 "success"，发生异常为 "failed"',
+      },
+    ];
+  }
+
+  if (workflowType === 'end') {
+    return [
+      {
+        key: 'text',
+        fullPath: `nodes.${nodeId}.text`,
+        templateSyntax: `{{nodes.${nodeId}.text}}`,
+        label: '最终合成回复',
+        type: 'string',
+        desc: '工作流最终渲染后交付给用户的完整回复内容',
+        isPrimary: true,
+      },
+    ];
+  }
+
+  return [];
+}
+
+/** 当前选中节点对外开放的全部标准输出字段 */
+const selectedNodeOutputFields = computed<WorkflowOutputFieldMeta[]>(() => {
+  if (!selectedNode.value) return [];
+  return getNodeOutputFields(selectedNode.value);
+});
+
+/** 当前选中节点的主要下游引用模板表达式 */
+const primaryVariableForSelectedNode = computed(() => {
+  if (!selectedNode.value) return '';
+  if (selectedNode.value.data.workflowType === 'start') {
+    return '{{input.query}}';
+  }
+  if (selectedNode.value.data.workflowType === 'llm-decision') {
+    return `{{nodes.${selectedNode.value.id}.data.choice}}`;
+  }
+  return `{{nodes.${selectedNode.value.id}.text}}`;
 });
 
 function skillOptionLabel(skill: WorkflowCatalogSkill): string {
@@ -1541,34 +2016,17 @@ function skillOptionLabel(skill: WorkflowCatalogSkill): string {
   return skill.description ? `${versionedName} — ${skill.description}` : versionedName;
 }
 
-const variableOptions = computed(() => {
-  const values = ['input.query', 'input.attachments_text'];
-  for (const node of flowNodes.value) {
-    if (node.data.workflowType === 'start') continue;
-    values.push(`nodes.${node.id}.text`, `nodes.${node.id}.status`);
-    if (node.data.workflowType === 'llm') values.push(`nodes.${node.id}.data.reasoning_content`);
-    if (node.data.workflowType === 'llm-decision') values.push(`nodes.${node.id}.data.choice`);
-    if (node.data.workflowType === 'knowledge-retrieval') values.push(`nodes.${node.id}.data.count`);
-    if (node.data.workflowType === 'http-request') {
-      values.push(`nodes.${node.id}.data.status_code`, `nodes.${node.id}.data.body`, `nodes.${node.id}.data.json`);
-    }
-  }
-  return values;
-});
-
 /**
- * 沿入边向上回溯，得到某个节点的全部上游节点。
+ * 沿入边回溯，得到某个节点的全部上游祖先节点（从最早执行的入口到紧邻的上一步）。
  *
- * 后端只允许当前分支上游的变量参与渲染，所以这里必须按路径真实回溯，
- * 否则用户从下拉里选到的变量会在运行时被判定为不可用。
+ * 后端只允许当前执行分支上游的变量参与渲染，所以必须按真实路径递归回溯。
  *
  * @param nodeId 起始节点 ID。
- * @returns 从近到远排列的上游节点。
+ * @returns 祖先节点列表（按拓扑升序排列，即起始步骤在前，最近步骤在后）。
  */
-function upstreamNodesFor(nodeId: string): EditorNode[] {
+function allAncestorsFor(nodeId: string): EditorNode[] {
   const incomingByTarget = new Map<string, string>();
   for (const edge of flowEdges.value) {
-    // 每个节点最多一条入边，因此无需处理汇聚场景。
     if (!incomingByTarget.has(edge.target)) incomingByTarget.set(edge.target, edge.source);
   }
   const result: EditorNode[] = [];
@@ -1578,33 +2036,112 @@ function upstreamNodesFor(nodeId: string): EditorNode[] {
     seen.add(current);
     const node = flowNodes.value.find((item) => item.id === current);
     if (!node) break;
-    if (node.data.workflowType !== 'start') result.push(node);
+    result.unshift(node);
     current = incomingByTarget.get(current);
   }
   return result;
 }
 
-/** 结束节点可引用的上游输出，用节点名称而不是 ID 展示。 */
-const upstreamNodeOptions = computed(() => {
-  if (selectedNode.value?.data.workflowType !== 'end') return [];
-  return upstreamNodesFor(selectedNode.value.id).map((node) => ({
-    label: node.data.name || node.id,
-    value: `{{nodes.${node.id}.text}}`,
-  }));
+/** 向上回溯上游处理节点（排除 start 节点），供历史兼容调用 */
+function upstreamNodesFor(nodeId: string): EditorNode[] {
+  return allAncestorsFor(nodeId).filter((n) => n.data.workflowType !== 'start');
+}
+
+/** 当前选中节点可引用的快捷上游变量药丸 */
+const quickUpstreamVariableOptions = computed<QuickVariableOption[]>(() => {
+  if (!selectedNode.value) return [];
+  const ancestors = allAncestorsFor(selectedNode.value.id);
+  const options: QuickVariableOption[] = [
+    {
+      label: '用户提问',
+      value: '{{input.query}}',
+      hint: '用户输入的原始问题 (input.query)',
+      type: 'string',
+      isPrimary: true,
+    },
+    {
+      label: '附件文本',
+      value: '{{input.attachments_text}}',
+      hint: '附件解析全文 (input.attachments_text)',
+      type: 'string',
+    },
+  ];
+
+  for (const node of ancestors) {
+    if (node.data.workflowType === 'start') continue;
+    const nodeName = node.data.name || node.id;
+    const fields = getNodeOutputFields(node);
+    // 优先加入主文本输出
+    const primary = fields.find((f) => f.isPrimary) || fields[0];
+    if (primary) {
+      options.push({
+        label: `${nodeName} · ${primary.label}`,
+        value: primary.templateSyntax,
+        hint: `[${nodeTypeLabel(node.data.workflowType)}] ${primary.desc} (${primary.fullPath})`,
+        type: primary.type,
+        isPrimary: true,
+      });
+    }
+    // 特殊节点的关键副字段也加入快捷选项
+    if (node.data.workflowType === 'knowledge-retrieval') {
+      const countField = fields.find((f) => f.key === 'count');
+      if (countField) {
+        options.push({
+          label: `${nodeName} · 命中数`,
+          value: countField.templateSyntax,
+          hint: `${countField.desc} (${countField.fullPath})`,
+          type: countField.type,
+        });
+      }
+    } else if (node.data.workflowType === 'llm-decision') {
+      const choiceField = fields.find((f) => f.key === 'choice');
+      if (choiceField && primary?.key !== 'choice') {
+        options.push({
+          label: `${nodeName} · 决策标签`,
+          value: choiceField.templateSyntax,
+          hint: `${choiceField.desc} (${choiceField.fullPath})`,
+          type: choiceField.type,
+        });
+      }
+    } else if (node.data.workflowType === 'http-request') {
+      const statusField = fields.find((f) => f.key === 'status_code');
+      if (statusField) {
+        options.push({
+          label: `${nodeName} · 状态码`,
+          value: statusField.templateSyntax,
+          hint: `${statusField.desc} (${statusField.fullPath})`,
+          type: statusField.type,
+        });
+      }
+    }
+  }
+
+  return options;
 });
 
-/** 结束节点默认取紧邻的上一步输出，而不是让用户面对空占位符。 */
-const endTemplatePlaceholder = computed(() => upstreamNodeOptions.value[0]?.value || '{{input.query}}');
+/** 结束节点可引用的上游输出，用节点名称展示 */
+const upstreamNodeOptions = computed(() => {
+  if (selectedNode.value?.data.workflowType !== 'end') return [];
+  return quickUpstreamVariableOptions.value;
+});
+
+/** 结束节点默认取紧邻的上一步输出，而不是让用户面对空占位符 */
+const endTemplatePlaceholder = computed(() => {
+  const list = quickUpstreamVariableOptions.value;
+  // 倒序找最后一个非全局输入的主输出
+  const lastStep = [...list].reverse().find((item) => item.value !== '{{input.query}}' && item.value !== '{{input.attachments_text}}');
+  return lastStep?.value || '{{input.query}}';
+});
 
 /**
- * 字段旁的说明文案里需要出现 {{...}} 字面量，而模板属性里的双大括号会被
- * Vue 编译器当成插值表达式，因此在脚本里拼好再渲染。
+ * 字段旁的说明文案里需要出现 {{...}} 字面量，在脚本中拼好
  */
 const urlFieldHint = '必须带 http:// 或 https://；变量只能写在路径或参数里，例如 https://example.com/api/{{nodes.retrieval-1.text}}';
-const toolArgumentHint = '按工具的入参写一个 JSON 对象；用 {{input.query}} 可以引用用户的问题。';
+const toolArgumentHint = '按工具的入参写一个 JSON 对象；可用 {{input.query}} 引用用户提问。';
 
 /**
- * 把变量占位符追加到某个文本模板字段末尾。
+ * 把变量占位符追加到某个文本模板字段中。
+ * 若字段非空且为多行字段，则换行追加；单行字段则无缝拼接。
  *
  * @param key 节点配置字段名。
  * @param variable 形如 {{nodes.x.text}} 的占位符。
@@ -1612,22 +2149,119 @@ const toolArgumentHint = '按工具的入参写一个 JSON 对象；用 {{input.
 function appendTemplateVariable(key: string, variable: string) {
   if (props.disabled) return;
   const current = configString(key);
-  updateConfig(key, current ? `${current}\n${variable}` : variable);
+  if (!current) {
+    updateConfig(key, variable);
+    return;
+  }
+  if (key === 'url') {
+    updateConfig(key, `${current}/${variable}`);
+    return;
+  }
+  updateConfig(key, `${current}\n${variable}`);
 }
 
 /**
- * 复制节点在模板里被引用时使用的变量前缀。
+ * 复制变量到剪贴板，并给出明确提示。
  *
- * 条件变量和输出模板都要求写 nodes.<节点 ID>，而节点 ID 是自动生成的，
- * 所以这里把它显式呈现出来，避免用户去猜。
- *
- * @param nodeId 节点 ID。
+ * @param text 待复制的文本（支持模板变量或判断路径）。
+ * @param successMessage 成功提示文案。
+ */
+async function copyVariableText(text: string, successMessage?: string) {
+  const ok = await copyToClipboard(text);
+  if (ok) {
+    MessagePlugin.success(successMessage || `已复制 ${text}`);
+  }
+}
+
+/**
+ * 复制选中节点的主引用变量。
  */
 async function copyNodeVariable(nodeId: string) {
-  const variable = `nodes.${nodeId}`;
-  const ok = await copyToClipboard(variable);
-  if (ok) MessagePlugin.success(`已复制 ${variable}`);
+  const node = flowNodes.value.find((n) => n.id === nodeId);
+  let text = `{{nodes.${nodeId}.text}}`;
+  if (node?.data.workflowType === 'start') {
+    text = '{{input.query}}';
+  } else if (node?.data.workflowType === 'llm-decision') {
+    text = `{{nodes.${nodeId}.data.choice}}`;
+  }
+  await copyVariableText(text, `已复制引用变量 ${text}，可直接粘贴到提示词或模板中`);
 }
+
+/**
+ * 针对当前选中的连线，严格计算其源节点及所有上游祖先节点的合法变量。
+ * 与后端 validation.go 中 ancestorSet(edge.Source, incoming) 逻辑 100% 对齐。
+ */
+const currentEdgeVariableOptions = computed<Array<{ label: string; value: string; hint?: string }>>(() => {
+  if (!selectedEdge.value) return [];
+  const sourceNode = flowNodes.value.find((n) => n.id === selectedEdge.value?.source);
+  if (!sourceNode) return [];
+
+  const options: Array<{ label: string; value: string; hint?: string }> = [
+    { label: '用户提问 (input.query)', value: 'input.query', hint: '字符串：用户提问内容' },
+    { label: '附件提取文本 (input.attachments_text)', value: 'input.attachments_text', hint: '字符串：附件提取文本' },
+  ];
+
+  // 源节点自身 + 源节点的所有上游祖先
+  const validNodes: EditorNode[] = [];
+  if (sourceNode.data.workflowType !== 'start') {
+    validNodes.push(sourceNode);
+  }
+  const ancestors = allAncestorsFor(sourceNode.id).filter((n) => n.data.workflowType !== 'start');
+  for (const anc of ancestors) {
+    if (!validNodes.some((n) => n.id === anc.id)) {
+      validNodes.push(anc);
+    }
+  }
+
+  for (const node of validNodes) {
+    const nodeName = node.data.name || node.id;
+    const fields = getNodeOutputFields(node);
+    for (const field of fields) {
+      options.push({
+        label: `[${nodeName}] ${field.label} · ${field.fullPath}`,
+        value: field.fullPath,
+        hint: `${field.type}：${field.desc}`,
+      });
+    }
+  }
+
+  return options;
+});
+
+/** 兼容旧逻辑的变量列表引用 */
+const variableOptions = computed(() => {
+  return currentEdgeVariableOptions.value.map((opt) => opt.value);
+});
+
+/** 连线源节点为分支判断时的候选标签 */
+const edgeSourceDecisionChoices = computed<string[]>(() => {
+  if (!selectedEdge.value) return [];
+  const sourceNode = flowNodes.value.find((n) => n.id === selectedEdge.value?.source);
+  if (sourceNode?.data.workflowType !== 'llm-decision') return [];
+  const rawChoices = sourceNode.data.config?.choices;
+  return Array.isArray(rawChoices) ? rawChoices.map(String).filter(Boolean) : [];
+});
+
+/** 连线新建判断条件时的默认变量 */
+const defaultConditionVariable = computed(() => {
+  if (!selectedEdge.value) return 'input.query';
+  const sourceNode = flowNodes.value.find((n) => n.id === selectedEdge.value?.source);
+  if (!sourceNode) return 'input.query';
+
+  if (sourceNode.data.workflowType === 'llm-decision') {
+    return `nodes.${sourceNode.id}.data.choice`;
+  }
+  if (sourceNode.data.workflowType === 'knowledge-retrieval') {
+    return `nodes.${sourceNode.id}.data.count`;
+  }
+  if (sourceNode.data.workflowType === 'http-request') {
+    return `nodes.${sourceNode.id}.data.status_code`;
+  }
+  if (sourceNode.data.workflowType !== 'start') {
+    return `nodes.${sourceNode.id}.text`;
+  }
+  return 'input.query';
+});
 
 const edgeCondition = computed<WorkflowCondition>(() => selectedEdge.value?.data?.condition || {
   mode: 'all',
@@ -1781,7 +2415,7 @@ function updateEdgeConditionMode(mode: string) {
   updateSelectedEdge((edge) => {
     edge.data = {
       ...(edge.data || { order: 0, is_default: false }),
-      condition: { mode: mode === 'any' ? 'any' : 'all', items: clone(edge.data?.condition?.items || [{ variable: variableOptions.value[0] || 'input.query', operator: 'eq', value: '' }]) },
+      condition: { mode: mode === 'any' ? 'any' : 'all', items: clone(edge.data?.condition?.items || [{ variable: defaultConditionVariable.value, operator: 'eq', value: '' }]) },
     };
   });
 }
@@ -1803,7 +2437,7 @@ function addConditionItem() {
       ...(edge.data || { order: 0, is_default: false }),
       condition: {
         ...condition,
-        items: [...condition.items, { variable: variableOptions.value[0] || 'input.query', operator: 'eq', value: '' }],
+        items: [...condition.items, { variable: defaultConditionVariable.value, operator: 'eq', value: '' }],
       },
     };
   });
@@ -1867,9 +2501,23 @@ function getNodeSnippet(data: WorkflowNodeData): string {
     }
     case 'tool': {
       const kind = data.config.kind || 'builtin';
-      if (kind === 'builtin') return `内置: ${data.config.tool_name || '未选'}`;
-      if (kind === 'mcp') return `MCP: ${data.config.tool_name || '未选'}`;
-      return `Skill: ${data.config.skill_name || '未选'}`;
+      if (kind === 'builtin') {
+        const toolName = (data.config.tool_name as string) || '';
+        if (!toolName) return '未选内置工具';
+        return `内置: ${getBuiltinToolLabel(toolName)}`;
+      }
+      if (kind === 'mcp') {
+        const toolName = (data.config.tool_name as string) || '';
+        const serviceId = (data.config.service_id as string) || '';
+        const service = mcpServices.value.find((s) => s.id === serviceId);
+        const tool = service?.tools.find((t) => t.name === toolName);
+        const toolLabel = tool?.display_name || toolName || '未选工具';
+        return `MCP: ${service?.name ? `${service.name} · ` : ''}${toolLabel}`;
+      }
+      const skillName = (data.config.skill_name as string) || '';
+      if (!skillName) return '未选沙箱技能';
+      const skill = skills.value.find((s) => s.name === skillName);
+      return `技能: ${skill?.name || skillName}`;
     }
     case 'end':
       return data.config.text_template ? '自定义回复输出' : '输出最终回答';
@@ -1942,7 +2590,17 @@ function newNodeID(type: WorkflowNodeType): string {
 
 function nextNodePosition(): { x: number; y: number } {
   const index = flowNodes.value.length;
-  return { x: 100 + (index % 4) * 260, y: 80 + Math.floor(index / 4) * 160 };
+  // 基于当前画布视口变换，确保直接点击添加时节点呈现在可见视野中
+  const zoom = viewport.value.zoom || 1;
+  const vx = viewport.value.x || 0;
+  const vy = viewport.value.y || 0;
+  const centerX = (-vx + 450) / zoom;
+  const centerY = (-vy + 260) / zoom;
+  const offset = (index % 6) * 36;
+  return {
+    x: Math.round(centerX - 105 + offset),
+    y: Math.round(centerY - 35 + offset),
+  };
 }
 
 function addNode(type: WorkflowNodeType, position?: { x: number; y: number }) {
@@ -1977,9 +2635,34 @@ function onPaletteDragStart(event: DragEvent, type: WorkflowNodeType) {
 }
 
 function onCanvasDrop(event: DragEvent) {
+  event.preventDefault();
   const type = event.dataTransfer?.getData('application/x-workflow-node') as WorkflowNodeType;
   if (!type) return;
-  addNode(type, nextNodePosition());
+
+  // 将鼠标松开时的屏幕像素坐标精准转换为 VueFlow 画布当前坐标系
+  let dropPosition: { x: number; y: number } | undefined;
+  if (typeof screenToFlowCoordinate === 'function') {
+    const rawPos = screenToFlowCoordinate({ x: event.clientX, y: event.clientY });
+    // 卡片标准宽度为 210px，让松开时光标落在卡片中心偏上位置
+    dropPosition = {
+      x: Math.round(rawPos.x - 105),
+      y: Math.round(rawPos.y - 35),
+    };
+  } else {
+    // 兼容兜底方案
+    const canvasEl = (document.querySelector('.workflow-canvas .vue-flow') as HTMLElement | null)
+      || (document.querySelector('.workflow-canvas') as HTMLElement | null);
+    if (canvasEl) {
+      const rect = canvasEl.getBoundingClientRect();
+      const zoom = viewport.value.zoom || 1;
+      dropPosition = {
+        x: Math.round((event.clientX - rect.left - (viewport.value.x || 0)) / zoom - 105),
+        y: Math.round((event.clientY - rect.top - (viewport.value.y || 0)) / zoom - 35),
+      };
+    }
+  }
+
+  addNode(type, dropPosition);
 }
 
 /**
@@ -2552,7 +3235,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 0 12px;
+  padding: 0 48px 12px 0;
   border-bottom: 1px solid var(--td-component-stroke);
   flex-shrink: 0;
 }
@@ -3529,39 +4212,169 @@ defineExpose({
   color: var(--td-brand-color);
 }
 
-/* 帮助参考 */
-.workflow-help-grid {
+/* 步骤输出与下游引用卡片规范 */
+.workflow-output-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.workflow-help-item {
+.workflow-output-card {
+  padding: 10px 12px;
+  background: var(--td-bg-color-secondarycontainer, #f8fafc);
+  border: 1px solid var(--td-component-stroke, #e2e8f0);
+  border-radius: 8px;
+  transition: all 0.18s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--td-brand-color) 40%, #e2e8f0);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  }
+}
+
+.workflow-output-card-top {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.workflow-output-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-output-card-label {
   font-size: 12px;
+  font-weight: 600;
+  color: var(--td-text-color-primary, #0f172a);
+}
+
+.workflow-type-badge {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--td-bg-color-container, #ffffff);
+  color: var(--td-text-color-secondary, #64748b);
+  border: 1px solid var(--td-component-stroke, #e2e8f0);
+}
+
+.workflow-primary-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
+  color: var(--td-brand-color);
+  font-weight: 500;
+}
+
+.workflow-output-card-desc {
+  font-size: 12px;
+  color: var(--td-text-color-secondary, #64748b);
   line-height: 1.45;
+  margin-bottom: 8px;
+}
 
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    color: var(--td-brand-color);
-    background: var(--td-bg-color-container);
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--td-component-stroke);
-    word-break: break-all;
-  }
+.workflow-output-card-codes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed color-mix(in srgb, var(--td-component-stroke) 80%, transparent);
+}
 
-  span:last-child {
-    color: var(--td-text-color-secondary);
+.workflow-code-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.workflow-code-row-title {
+  color: var(--td-text-color-placeholder, #94a3b8);
+  font-size: 11px;
+  min-width: 54px;
+}
+
+.workflow-clickable-code {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--td-brand-color);
+  background: var(--td-bg-color-container, #ffffff);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--td-component-stroke, #e2e8f0);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.16s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
+    border-color: var(--td-brand-color);
   }
 }
 
-.workflow-help-label {
-  font-weight: 600;
-  color: var(--td-text-color-primary);
+.workflow-copy-mini-btn {
+  padding: 3px;
+  border: none;
+  background: transparent;
+  color: var(--td-text-color-placeholder, #94a3b8);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.16s ease;
+
+  &:hover {
+    color: var(--td-brand-color);
+    background: color-mix(in srgb, var(--td-brand-color) 10%, transparent);
+  }
+}
+
+/* 连线快捷候选标签 */
+.workflow-quick-choices {
+  margin-top: 6px;
+}
+
+.workflow-quick-choices-title {
+  display: block;
+  font-size: 11px;
+  color: var(--td-text-color-secondary, #64748b);
+  margin-bottom: 4px;
+}
+
+.workflow-quick-choice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workflow-quick-choice-chip {
+  padding: 2px 8px;
+  border: 1px dashed var(--td-brand-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--td-brand-color) 5%, transparent);
+  color: var(--td-brand-color);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+
+  &:hover:not(:disabled) {
+    background: var(--td-brand-color);
+    color: #fff;
+    border-style: solid;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 /* 连线配置样式 */

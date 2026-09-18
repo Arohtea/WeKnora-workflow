@@ -13,14 +13,14 @@
             <template #content>
               <div class="share-hint-popover">
                 <p class="share-hint-title">{{ $t('agent.shareScope.title') }}</p>
-                <p class="share-hint-desc">{{ $t('organization.share.agentShareDesc') }}</p>
-                <p v-if="agent?.config" class="share-hint-desc">{{ $t('agent.shareScope.desc') }}</p>
+                <p class="share-hint-desc">{{ isWorkflow ? '将工作流共享到共享空间，共享空间成员可使用该工作流' : $t('organization.share.agentShareDesc') }}</p>
+                <p v-if="agent?.config" class="share-hint-desc">{{ isWorkflow ? '空间成员以只读方式使用该工作流，将遵循您当前配置的能力与资源；您对工作流的修改会同步给已共享的空间。如需允许空间成员编辑知识库内容，请将知识库共享到空间。' : $t('agent.shareScope.desc') }}</p>
               </div>
             </template>
           </t-popup>
         </div>
       </div>
-      <p class="share-panel-desc">{{ $t('organization.share.agentShareDesc') }}</p>
+      <p class="share-panel-desc">{{ isWorkflow ? '将工作流共享到共享空间，共享空间成员可使用该工作流' : $t('organization.share.agentShareDesc') }}</p>
     </div>
 
     <div class="share-panel-list-wrap">
@@ -141,6 +141,8 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+
+const isWorkflow = computed(() => props.agent?.config?.agent_type === 'workflow')
 
 const shareHintPopupInnerStyle = {
   boxSizing: 'border-box' as const,

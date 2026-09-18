@@ -50,22 +50,22 @@
                   <div class="section-header">
                     <div class="section-header-title">
                       <h2>{{ $t('agent.editor.basicInfo') }}</h2>
-                      <t-tooltip v-if="isBuiltinAgent" :content="$t('agentEditor.builtinHint')" placement="top">
+                      <t-tooltip v-if="isBuiltinAgent" :content="isWorkflow ? '这是内置工作流，名称和描述不可修改，但可以调整配置参数' : $t('agentEditor.builtinHint')" placement="top">
                         <span class="builtin-agent-hint" tabindex="0" role="img"
-                          :aria-label="$t('agentEditor.builtinHint')">
+                          :aria-label="isWorkflow ? '这是内置工作流，名称和描述不可修改，但可以调整配置参数' : $t('agentEditor.builtinHint')">
                           <t-icon name="info-circle" />
                         </span>
                       </t-tooltip>
                     </div>
-                    <p class="section-description">{{ $t('agent.editor.basicInfoDesc') }}</p>
+                    <p class="section-description">{{ isWorkflow ? '配置工作流的名称与描述' : $t('agent.editor.basicInfoDesc') }}</p>
                   </div>
 
                   <div class="settings-group">
-                    <!-- 智能体 ID（用于 API 集成） -->
+                    <!-- 工作流 / 智能体 ID（用于 API 集成） -->
                     <div v-if="editorMode === 'edit' && editorAgent?.id" class="setting-row">
                       <div class="setting-info">
-                        <label>{{ $t('agent.editor.agentId') }}</label>
-                        <p class="desc">{{ $t('agent.editor.agentIdDesc') }}</p>
+                        <label>{{ isWorkflow ? '工作流 ID' : $t('agent.editor.agentId') }}</label>
+                        <p class="desc">{{ isWorkflow ? '用于通过 API 调用此工作流' : $t('agent.editor.agentIdDesc') }}</p>
                       </div>
                       <div class="setting-control">
                         <div class="agent-id-field">
@@ -84,7 +84,7 @@
                     <div v-if="editorMode === 'edit' && editorAgent?.id" class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('integrations.agentEditor.label') }}</label>
-                        <p class="desc">{{ isPostCreateSession ? $t('agent.editor.postCreateHint.integrationDesc') : $t('integrations.agentEditor.desc') }}</p>
+                        <p class="desc">{{ isPostCreateSession ? (isWorkflow ? '前往集成中心配置 IM、网页嵌入等发布渠道' : $t('agent.editor.postCreateHint.integrationDesc')) : (isWorkflow ? '将工作流发布到 IM 平台或网站，在集成中心统一管理' : $t('integrations.agentEditor.desc')) }}</p>
                       </div>
                       <div class="setting-control">
                         <div class="integration-inline">
@@ -148,7 +148,7 @@
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.name') }} <span v-if="!isBuiltinAgent"
                             class="required">*</span></label>
-                        <p class="desc">{{ $t('agentEditor.desc.name') }}</p>
+                        <p class="desc">{{ isWorkflow ? '为工作流设置一个易于识别的名称' : $t('agentEditor.desc.name') }}</p>
                       </div>
                       <div class="setting-control">
                         <div class="name-input-wrapper">
@@ -156,9 +156,9 @@
                           <div v-if="isBuiltinAgent" class="builtin-avatar" :class="isAgentMode ? 'agent' : 'normal'">
                             <t-icon :name="isAgentMode ? 'control-platform' : 'chat'" size="24px" />
                           </div>
-                          <!-- 自定义智能体使用 AgentAvatar -->
+                          <!-- 自定义智能体/工作流使用 AgentAvatar -->
                           <AgentAvatar v-else :name="formData.name || '?'" size="medium" />
-                          <t-input v-model="formData.name" :placeholder="$t('agent.editor.namePlaceholder')"
+                          <t-input v-model="formData.name" :placeholder="isWorkflow ? '请输入工作流名称' : $t('agent.editor.namePlaceholder')"
                             class="name-input" :disabled="isBuiltinAgent" />
                         </div>
                       </div>
@@ -168,11 +168,11 @@
                     <div class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.description') }}</label>
-                        <p class="desc">{{ $t('agentEditor.desc.description') }}</p>
+                        <p class="desc">{{ isWorkflow ? '简要描述工作流的用途与执行流程' : $t('agentEditor.desc.description') }}</p>
                       </div>
                       <div class="setting-control">
                         <t-textarea v-model="formData.description"
-                          :placeholder="$t('agent.editor.descriptionPlaceholder')"
+                          :placeholder="isWorkflow ? '请输入工作流描述' : $t('agent.editor.descriptionPlaceholder')"
                           :autosize="{ minRows: 2, maxRows: 4 }" :disabled="isBuiltinAgent" />
                       </div>
                     </div>
@@ -183,7 +183,7 @@
                     <div class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.memoryEnabled') }}</label>
-                        <p class="desc">{{ $t('agentEditor.desc.memoryEnabled') }}</p>
+                        <p class="desc">{{ isWorkflow ? '允许该工作流读取并补充你的长期记忆。关闭后，与它的对话既不会读取记忆，也不会新增记忆。空间或个人设置关闭时，这里开启也不会生效' : $t('agentEditor.desc.memoryEnabled') }}</p>
                       </div>
                       <div class="setting-control">
                         <t-switch v-model="formData.config.memory_enabled" />
@@ -619,7 +619,7 @@
                 <div v-show="currentSection === 'model'" class="section">
                   <div class="section-header">
                     <h2>{{ $t('agent.editor.modelConfig') }}</h2>
-                    <p class="section-description">{{ $t('agent.editor.modelConfigDesc') }}</p>
+                    <p class="section-description">{{ isWorkflow ? '配置工作流节点的默认模型与生成参数' : $t('agent.editor.modelConfigDesc') }}</p>
                   </div>
 
                   <div class="settings-group">
@@ -632,7 +632,7 @@
                     >
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.model') }} <span class="required">*</span></label>
-                        <p class="desc">{{ $t('agentEditor.desc.model') }}</p>
+                        <p class="desc">{{ isWorkflow ? '选择工作流节点的默认模型' : $t('agentEditor.desc.model') }}</p>
                       </div>
                       <div class="setting-control">
                         <ModelSelector model-type="KnowledgeQA" :selected-model-id="formData.config.model_id"
@@ -1323,7 +1323,7 @@
                 </div>
 
                 <!-- 技能：脚本跑在所选沙箱里，可用列表也来自这份配置 -->
-                <div v-show="currentSection === 'skills' && isAgentMode" class="section">
+                <div v-show="currentSection === 'skills' && (isAgentMode || isWorkflow)" class="section">
                   <div class="section-header">
                     <h2>{{ $t('agent.editor.skillsConfig') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.skillsConfigDesc') }}</p>
@@ -1497,7 +1497,7 @@
                 <div v-show="currentSection === 'knowledge'" class="section">
                   <div class="section-header">
                     <h2>{{ $t('agent.editor.knowledgeConfig') }}</h2>
-                    <p class="section-description">{{ $t('agent.editor.knowledgeConfigDesc') }}</p>
+                    <p class="section-description">{{ isWorkflow ? '配置工作流可访问的知识库范围' : $t('agent.editor.knowledgeConfigDesc') }}</p>
                   </div>
 
                   <div class="settings-group">
@@ -1505,7 +1505,7 @@
                     <div class="setting-row" data-guide="agent-create-knowledge">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.knowledgeBases') }}</label>
-                        <p class="desc">{{ $t('agentEditor.desc.kbScope') }}</p>
+                        <p class="desc">{{ isWorkflow ? '选择工作流可访问的知识库范围' : $t('agentEditor.desc.kbScope') }}</p>
                       </div>
                       <div class="setting-control">
                         <t-radio-group v-model="kbSelectionMode">
@@ -1567,7 +1567,7 @@
                     <div v-if="hasKnowledgeBase" class="setting-row">
                       <div class="setting-info">
                         <label>{{ $t('agentEditor.fileTypes.label') }}</label>
-                        <p class="desc">{{ $t('agentEditor.fileTypes.desc') }}</p>
+                        <p class="desc">{{ isWorkflow ? '为不同文件类型指定解析引擎，仅对当前工作流的聊天附件生效' : $t('agentEditor.fileTypes.desc') }}</p>
                       </div>
                       <div class="setting-control">
                         <t-select v-model="formData.config.supported_file_types" multiple
@@ -1819,25 +1819,37 @@
                 <p v-if="isPostCreateSession" class="settings-footer-note">
                   <t-icon name="check-circle-filled" class="settings-footer-note__icon" />
                   <span>
-                    <strong>{{ $t('agent.editor.postCreateHint.title') }}</strong>
-                    {{ $t('agent.editor.postCreateHint.footer') }}
+                    <strong>{{ isWorkflow ? '创建成功' : $t('agent.editor.postCreateHint.title') }}</strong>
+                    {{ isWorkflow ? '可继续调整工作流配置，设置共享与发布渠道，完成后点击「保存并关闭」。' : $t('agent.editor.postCreateHint.footer') }}
                   </span>
                 </p>
                 <div class="settings-footer-actions">
                   <t-button variant="outline" @click="handleClose">{{ props.readOnly ? $t('common.close') :
                     $t('common.cancel')
                     }}</t-button>
-                  <t-button v-if="isWorkflow && !props.readOnly" variant="outline" :loading="workflowRunLoading"
-                    :disabled="saving || editorInitializing" title="保存后打开一个新对话，你可以直接提问验证效果"
-                    @click="handleWorkflowRun">
-                    <t-icon name="play-circle" />
-                    保存并去试用
+                  <t-button
+                    v-if="isWorkflow && !props.readOnly"
+                    variant="outline"
+                    :loading="workflowRunLoading"
+                    :disabled="saving || editorInitializing"
+                    title="保存工作流配置并前往对话页面体验"
+                    @click="handleWorkflowRun"
+                  >
+                    <template #icon>
+                      <t-icon name="play-circle" />
+                    </template>
+                    <span>保存并试用</span>
                   </t-button>
-                  <t-button v-if="!props.readOnly" theme="primary" data-guide="agent-create-submit" :loading="saving"
-                    :disabled="editorInitializing"
-                    @click="handleSave">{{
-                    editorSaveButtonLabel
-                    }}</t-button>
+                  <t-button
+                    v-if="!props.readOnly"
+                    theme="primary"
+                    data-guide="agent-create-submit"
+                    :loading="saving"
+                    :disabled="workflowRunLoading || editorInitializing"
+                    @click="handleSave"
+                  >
+                    {{ editorSaveButtonLabel }}
+                  </t-button>
                 </div>
               </div>
             </div>
@@ -1869,7 +1881,7 @@
     />
   </SettingDrawer>
 
-  <AgentCreateContextualGuide :when="visible && editorMode === 'create' && !isWorkflowResource" :is-agent-mode="isAgentMode" />
+  <AgentCreateContextualGuide :when="visible && editorMode === 'create' && !isWorkflow" :is-agent-mode="isAgentMode" />
 </template>
 
 <script setup lang="ts">
@@ -1918,6 +1930,7 @@ import { useOrganizationStore } from '@/stores/organization';
 import { useChatResourcesStore } from '@/stores/chatResources';
 import { useEditorResourcesStore } from '@/stores/editorResources';
 import { useMenuStore } from '@/stores/menu';
+import { useSettingsStore } from '@/stores/settings';
 import AgentAvatar from '@/components/AgentAvatar.vue';
 import PromptTemplateSelector from '@/components/PromptTemplateSelector.vue';
 import ModelSelector from '@/components/ModelSelector.vue';
@@ -1952,6 +1965,7 @@ const orgStore = useOrganizationStore();
 const chatResources = useChatResourcesStore();
 const editorResources = useEditorResourcesStore();
 const menuStore = useMenuStore();
+const settingsStore = useSettingsStore();
 
 const { t, locale: i18nLocale } = useI18n();
 
@@ -2211,7 +2225,7 @@ const showCatalogSkillList = computed(() =>
 
 const skillsSelectionHint = computed(() => {
   if (skillsSelectionMode.value === 'all') return t('agent.editor.skillsAllListHint')
-  if (skillsSelectionMode.value === 'selected') return t('agent.editor.selectSkillsDesc')
+  if (skillsSelectionMode.value === 'selected') return isWorkflow.value ? '勾选要给这个工作流用的技能。没装到当前沙箱的不能勾选，请先点右侧「安装」。' : t('agent.editor.selectSkillsDesc')
   return t('agent.editor.skillsSelectionDesc')
 })
 
@@ -3008,7 +3022,7 @@ const agentMode = computed({
 });
 
 const isAgentMode = computed(() => agentMode.value === 'smart-reasoning');
-const isWorkflow = computed(() => agentType.value === 'workflow');
+const isWorkflow = computed(() => agentType.value === 'workflow' || isWorkflowResource.value);
 
 const effectiveDefaultMaxCompletionTokens = computed(() =>
   defaultMaxCompletionTokensFor(agentMode.value, formData.value.config.sandbox_config_id),
@@ -4126,15 +4140,45 @@ const workflowBuiltinToolNames = new Set([
   'data_schema',
 ]);
 
+const WORKFLOW_BUILTIN_TOOL_METAS: Record<string, { label: string; desc: string }> = {
+  web_search: { label: '网络搜索', desc: '在互联网上搜索最新公开信息' },
+  web_fetch: { label: '网页抓取', desc: '抓取并提取指定网页的正文文本' },
+  database_query: { label: '数据库查询', desc: '在配置的关联数据库中执行只读 SQL 查询' },
+  data_analysis: { label: '数据分析', desc: '统计和分析表格、CSV或结构化数据' },
+  data_schema: { label: '数据结构元信息', desc: '查看数据库或数据表的元结构与字段信息' },
+  wiki_search: { label: 'Wiki 搜索', desc: '在 Wiki 知识库中检索相关页面' },
+  wiki_read_page: { label: 'Wiki 页面阅读', desc: '读取指定 Wiki 页面的完整内容' },
+  wiki_read_source_doc: { label: '精读源文档', desc: '深入阅读 Wiki 页面背后的原始源文档' },
+  wiki_read_issue: { label: '查看 Wiki 问题', desc: '查看特定 Wiki 页面上标记的事实或冲突问题' },
+  wiki_flag_issue: { label: '标记 Wiki 问题', desc: '标记页面中存在的事实错误或合并冲突问题' },
+  wiki_write_page: { label: '创建/覆盖 Wiki', desc: '创建新页面或完全覆盖已有 Wiki 页面' },
+  wiki_replace_text: { label: '局部替换 Wiki', desc: '替换 Wiki 页面中的特定文本' },
+  wiki_rename_page: { label: '重命名 Wiki', desc: '重命名 Wiki 页面并自动更新关联链接' },
+  wiki_delete_page: { label: '删除 Wiki', desc: '删除 Wiki 页面并自动清理关联死链' },
+  wiki_update_issue: { label: '更新 Wiki 问题', desc: '更新 Wiki 页面问题的处理状态' },
+  search_conversations: { label: '搜索历史会话', desc: '检索过去的对话记录与用户提问' },
+  search_memory: { label: '检索长期记忆', desc: '查找当前用户的长期记忆与个人偏好' },
+  grep_chunks: { label: '关键词搜索', desc: '在知识库切片中进行精准全文匹配' },
+  knowledge_search: { label: '知识库语义检索', desc: '基于向量语义在知识库中匹配相关片段' },
+  list_knowledge_chunks: { label: '查看知识切片', desc: '按序浏览或检索知识文档切片清单' },
+  query_knowledge_graph: { label: '查询知识图谱', desc: '查询知识库构建的实体与关系图谱' },
+  get_document_info: { label: '获取文档信息', desc: '查看知识库中原始文档的元数据' },
+  todo_write: { label: '计划管理', desc: '维护多步任务的待办清单与完成状态' },
+  thinking: { label: '深度思考', desc: '输出推理与分析过程' },
+};
+
 async function buildLocalWorkflowCatalog(): Promise<WorkflowCatalog> {
-  const builtin_tools = allTools.value
-    .filter((tool) => workflowBuiltinToolNames.has(tool.value))
-    .map((tool) => ({
-      name: tool.value,
-      display_name: tool.label,
-      description: tool.description,
+  const allToolMap = new Map(allTools.value.map((tool) => [tool.value, tool]));
+  const builtin_tools = Array.from(workflowBuiltinToolNames).map((name) => {
+    const fromAll = allToolMap.get(name);
+    const meta = WORKFLOW_BUILTIN_TOOL_METAS[name];
+    return {
+      name,
+      display_name: fromAll?.label || meta?.label || name,
+      description: fromAll?.description || meta?.desc || '',
       parameters: {},
-    }));
+    };
+  });
 
   const mcp_services = await Promise.all(
     editorResources.mcpServices
@@ -4179,8 +4223,22 @@ async function refreshWorkflowCatalog(agentId?: string) {
     if (agentId) {
       const response = await getWorkflowCatalog(agentId);
       if (response?.data) {
+        // 保证后端返回的工具也全部具备友好中文名称，防止覆盖成英文代码变量名
+        const mergedBuiltinTools = (response.data.builtin_tools || []).map((tool) => {
+          const localMatch = localCatalog.builtin_tools.find((lt) => lt.name === tool.name);
+          const meta = WORKFLOW_BUILTIN_TOOL_METAS[tool.name];
+          const friendly = (tool.display_name && tool.display_name !== tool.name)
+            ? tool.display_name
+            : (localMatch?.display_name || meta?.label || tool.name);
+          return {
+            ...tool,
+            display_name: friendly,
+            description: tool.description || localMatch?.description || meta?.desc || '',
+          };
+        });
         workflowCatalog.value = {
           ...response.data,
+          builtin_tools: mergedBuiltinTools,
           // Skill 必须跟随当前草稿选择的沙箱，不能沿用服务端已保存配置的目录。
           skills: localCatalog.skills,
         };
@@ -5025,29 +5083,15 @@ async function handleWorkflowRun() {
   if (workflowRunLoading.value || saving.value || props.readOnly || !isWorkflow.value) return;
   workflowRunLoading.value = true;
   try {
-    if (!await handleSave()) return;
+    const success = await handleSave();
+    if (!success) return;
     const agentId = formData.value.id || editorAgent.value?.id;
     if (!agentId) {
       throw new Error(t('agent.messages.saveFailed'));
     }
-    const response: any = await createSessions({});
-    if (!response?.data?.id) {
-      throw new Error(t('createChat.messages.createFailed'));
-    }
-    const sessionId = response.data.id as string;
-    const now = new Date().toISOString();
-    menuStore.updataMenuChildren({
-      title: t('createChat.newSessionTitle'),
-      path: `chat/${sessionId}`,
-      id: sessionId,
-      isMore: false,
-      isNoTitle: true,
-      created_at: now,
-      updated_at: now,
-    });
-    menuStore.changeIsFirstSession(false);
+    settingsStore.selectAgent(agentId);
     handleClose();
-    await router.push({ path: `/platform/chat/${sessionId}`, query: { agent_id: agentId } });
+    await router.push({ path: '/platform/creatChat', query: { agent_id: agentId } });
   } catch (e: any) {
     MessagePlugin.error(e?.message || t('createChat.messages.createError'));
   } finally {
@@ -5074,7 +5118,7 @@ const handleSave = async (): Promise<boolean> => {
   // 验证必填项（内置智能体不验证名称和系统提示词）
   if (!isBuiltinAgent.value) {
     if (!formData.value.name || !formData.value.name.trim()) {
-      MessagePlugin.error(t('agent.editor.nameRequired'));
+      MessagePlugin.error(isWorkflow.value ? (t('workflow.messages.nameRequired') || '请输入工作流名称') : t('agent.editor.nameRequired'));
       currentSection.value = 'basic';
       return false;
     }
@@ -5156,7 +5200,7 @@ const handleSave = async (): Promise<boolean> => {
       const result: any = await createAgent(payload);
       const created = result?.data as CustomAgent | undefined;
       if (!created?.id) {
-        throw new Error(result?.message || t('agent.messages.saveFailed'));
+        throw new Error(result?.message || (isWorkflow.value ? (t('workflow.messages.saveFailed') || '保存工作流失败') : t('agent.messages.saveFailed')));
       }
       savedAgent.value = created;
       formData.value.id = created.id;
@@ -5167,13 +5211,13 @@ const handleSave = async (): Promise<boolean> => {
       emit('success', created);
     } else {
       await updateAgent(formData.value.id, payload);
-      MessagePlugin.success(t('agent.messages.updated'));
+      MessagePlugin.success(isWorkflow.value ? (t('workflow.messages.updated') || '工作流更新成功') : t('agent.messages.updated'));
       emit('success');
       handleClose();
     }
     return true;
   } catch (e: any) {
-    MessagePlugin.error(e?.message || t('agent.messages.saveFailed'));
+    MessagePlugin.error(e?.message || (isWorkflow.value ? (t('workflow.messages.saveFailed') || '保存工作流失败') : t('agent.messages.saveFailed')));
     return false;
   } finally {
     saving.value = false;
@@ -6019,8 +6063,41 @@ const handleSave = async (): Promise<boolean> => {
 
 .settings-footer-actions {
   display: flex;
+  align-items: center;
   gap: 12px;
   flex-shrink: 0;
+
+  :deep(.t-button) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+  }
+
+  :deep(.t-button__icon) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    line-height: 1;
+    margin-right: 6px;
+  }
+
+  :deep(.t-button__text) {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+    gap: 6px;
+  }
+
+  :deep(.t-icon) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    line-height: 1;
+    vertical-align: middle;
+  }
 }
 
 /* 滚动条：与设置弹窗一致 */

@@ -7201,8 +7201,11 @@ export default {
     createWorkflow: '创建工作流',
     messages: {
       created: '工作流创建成功',
+      updated: '工作流更新成功',
       deleted: '工作流已删除',
       deleteFailed: '删除工作流失败',
+      saveFailed: '保存工作流失败',
+      nameRequired: '请输入工作流名称',
     },
     delete: {
       confirmTitle: '删除工作流',

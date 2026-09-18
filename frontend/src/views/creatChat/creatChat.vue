@@ -177,7 +177,22 @@ watch(
     { deep: true },
 );
 
-onMounted(() => { fetchSuggestedQuestions(); });
+const syncRouteAgent = () => {
+    const queryAgentId = route.query.agent_id as string;
+    if (queryAgentId && queryAgentId !== settingsStore.selectedAgentId) {
+        settingsStore.selectAgent(queryAgentId);
+    }
+};
+
+watch(
+    () => route.query.agent_id,
+    () => { syncRouteAgent(); },
+);
+
+onMounted(() => {
+    syncRouteAgent();
+    fetchSuggestedQuestions();
+});
 
 const inputFieldRef = ref();
 

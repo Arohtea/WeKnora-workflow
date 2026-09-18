@@ -154,9 +154,13 @@ func (s *agentService) WorkflowCatalog(
 		if _, allowed := workflowruntime.BuiltinToolAllowlist[definition.Name]; !allowed {
 			continue
 		}
+		displayName := definition.Name
+		if label, ok := builtinToolDisplayNames[definition.Name]; ok {
+			displayName = label
+		}
 		catalog.BuiltinTools = append(catalog.BuiltinTools, types.WorkflowCatalogTool{
 			Name:        definition.Name,
-			DisplayName: definition.Name,
+			DisplayName: displayName,
 			Description: definition.Description,
 			Parameters:  definition.Parameters,
 		})
@@ -447,4 +451,31 @@ func workflowMCPAuthWaitTimeout(config *types.AgentConfig) int {
 
 func registryToolName(service *types.MCPService, definition *types.MCPTool) string {
 	return agenttools.NewMCPTool(service, definition, nil, nil, 0).Name()
+}
+
+var builtinToolDisplayNames = map[string]string{
+	"web_search":            "网络搜索",
+	"web_fetch":             "网页抓取",
+	"database_query":        "数据库查询",
+	"data_analysis":         "数据分析",
+	"data_schema":           "数据结构元信息",
+	"wiki_search":           "Wiki 搜索",
+	"wiki_read_page":        "Wiki 页面阅读",
+	"wiki_read_source_doc":  "精读源文档",
+	"wiki_read_issue":       "查看 Wiki 问题",
+	"wiki_flag_issue":       "标记 Wiki 问题",
+	"wiki_write_page":       "创建/覆盖 Wiki",
+	"wiki_replace_text":     "局部替换 Wiki",
+	"wiki_rename_page":      "重命名 Wiki",
+	"wiki_delete_page":      "删除 Wiki",
+	"wiki_update_issue":     "更新 Wiki 问题",
+	"search_conversations":  "搜索历史会话",
+	"search_memory":         "检索长期记忆",
+	"grep_chunks":           "关键词搜索",
+	"knowledge_search":      "知识库检索",
+	"list_knowledge_chunks": "查看知识切片",
+	"query_knowledge_graph": "查询知识图谱",
+	"get_document_info":     "获取文档信息",
+	"todo_write":            "计划管理",
+	"thinking":              "深度思考",
 }
