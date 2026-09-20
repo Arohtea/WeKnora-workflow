@@ -1158,81 +1158,267 @@
       </button>
     </div>
 
-    <aside v-if="debugDrawerOpen" class="workflow-debug-drawer" aria-label="工作流试跑">
+    <aside
+      v-if="debugDrawerOpen"
+      class="workflow-debug-drawer"
+      :class="{ 'is-minimized': debugMinimized }"
+      aria-label="工作流草稿试跑控制台"
+    >
       <div class="workflow-debug-drawer__header">
-        <div>
-          <strong>草稿试跑</strong>
-          <small>只执行当前草稿快照，不会改变正式版本。</small>
+        <div class="workflow-debug-drawer__title-area">
+          <div class="workflow-debug-drawer__badge-icon">
+            <t-icon :name="debugLoading ? 'loading' : 'terminal'" />
+          </div>
+          <div class="workflow-debug-drawer__titles">
+            <div class="workflow-debug-drawer__headline">
+              <strong>草稿试跑控制台</strong>
+              <span class="workflow-debug-pill workflow-debug-pill--revision">快照 r{{ draftRevision }}</span>
+              <span
+                class="workflow-debug-pill"
+                :class="debugLoading ? 'workflow-debug-pill--running' : (debugRun ? `workflow-debug-pill--${debugRun.status}` : 'workflow-debug-pill--idle')"
+              >
+                <span class="workflow-debug-pill__dot" />
+                {{ debugLoading ? '执行中…' : (debugRun ? workflowRunStatusLabel(debugRun.status) : '就绪待跑') }}
+              </span>
+            </div>
+            <small class="workflow-debug-drawer__sub">基于当前草稿快照隔离运行，不影响线上正式版本</small>
+          </div>
         </div>
-        <button type="button" class="workflow-icon-button" title="关闭试跑面板" @click="closeDebugRun">
-          <t-icon name="close" />
-        </button>
-      </div>
-      <div class="workflow-debug-drawer__body">
-        <label class="workflow-debug-field">
-          <span>输入问题</span>
-          <textarea v-model="debugQuery" rows="4" placeholder="输入一条样例问题，试跑当前草稿" :disabled="debugLoading" />
-        </label>
-        <label class="workflow-debug-field">
-          <span>附件文本（可选）</span>
-          <textarea v-model="debugAttachmentsText" rows="3" placeholder="粘贴附件解析文本" :disabled="debugLoading" />
-        </label>
-        <div class="workflow-debug-actions">
+
+        <div class="workflow-debug-drawer__header-actions">
           <button
-            v-if="debugRun && !debugRunTerminal"
+            v-if="!debugMinimized"
             type="button"
-            class="workflow-toolbar-btn workflow-toolbar-btn--danger"
-            :disabled="debugLoading"
-            @click="cancelDebugRun"
+            class="workflow-debug-tool-btn"
+            title="快捷填入测试样例问题"
+            @click="fillSampleDebugQuery"
           >
-            <t-icon name="stop-circle" />
-            <span>停止</span>
+            <t-icon name="edit" />
+            <span>示例样例</span>
           </button>
           <button
-            v-else
+            v-if="debugRun && debugRunTerminal && !debugMinimized"
             type="button"
-            class="workflow-toolbar-btn workflow-toolbar-btn--primary"
-            :disabled="debugLoading || !debugQuery.trim()"
-            @click="startDebugRun"
-          >
-            <t-icon :name="debugLoading ? 'loading' : 'play-circle'" />
-            <span>{{ debugLoading ? '启动中…' : '开始试跑' }}</span>
-          </button>
-          <button
-            v-if="debugRun && debugRunTerminal"
-            type="button"
-            class="workflow-toolbar-btn"
+            class="workflow-debug-tool-btn"
             :disabled="debugLoading"
+            title="使用当前参数重新执行一次整次试跑"
             @click="retryDebugRun"
           >
             <t-icon name="refresh" />
             <span>整次重跑</span>
           </button>
+          <button
+            type="button"
+            class="workflow-icon-button"
+            :title="debugMinimized ? '展开试跑控制台' : '最小化试跑控制台'"
+            @click="debugMinimized = !debugMinimized"
+          >
+            <t-icon :name="debugMinimized ? 'chevron-up' : 'chevron-down'" />
+          </button>
+          <button
+            type="button"
+            class="workflow-icon-button workflow-icon-button--close"
+            title="关闭试跑面板"
+            @click="closeDebugRun"
+          >
+            <t-icon name="close" />
+          </button>
         </div>
-        <div v-if="debugRun" class="workflow-debug-run-summary">
-          <div class="workflow-debug-run-summary__title">
-            <span>运行 {{ debugRun.id }}</span>
-            <strong :class="`is-${debugRun.status}`">{{ workflowRunStatusLabel(debugRun.status) }}</strong>
+      </div>
+
+      <div v-show="!debugMinimized" class="workflow-debug-drawer__body">
+        <!-- 左栏：测试入参配置 -->
+        <div class="workflow-debug-left">
+          <div class="workflow-debug-section-head">
+            <div class="workflow-debug-section-head__title">
+              <t-icon name="chat" />
+              <span>测试入参配置</span>
+            </div>
+            <button
+              v-if="debugQuery || debugAttachmentsText"
+              type="button"
+              class="workflow-link-button workflow-debug-clear-btn"
+              title="清空当前输入"
+              @click="clearDebugInputs"
+            >
+              清空输入
+            </button>
           </div>
-          <p v-if="debugRun.error_summary" class="workflow-debug-error">{{ debugRun.error_summary }}</p>
-          <div v-if="debugRun.nodes?.length" class="workflow-debug-nodes">
-            <div v-for="node in debugRun.nodes" :key="node.id" class="workflow-debug-node">
-              <span class="workflow-debug-node__status" :class="`is-${node.status}`" />
-              <div class="workflow-debug-node__main">
-                <strong>{{ node.node_name }}</strong>
-                <small>{{ workflowNodeStatusLabel(node.status) }} · {{ node.duration_ms || 0 }}ms</small>
-                <p v-if="node.error_summary">{{ node.error_summary }}</p>
-                <p v-else-if="node.output_summary">{{ node.output_summary }}</p>
+
+          <div class="workflow-debug-form">
+            <div class="workflow-debug-field">
+              <div class="workflow-debug-field__label">
+                <span>用户提问 (Query)</span>
+                <span class="workflow-debug-field__required">*必填</span>
               </div>
-              <button
-                v-if="node.status === 'failed'"
-                type="button"
-                class="workflow-link-button"
+              <div class="workflow-debug-textarea-wrap">
+                <textarea
+                  v-model="debugQuery"
+                  rows="3"
+                  placeholder="输入一条样例问题，试跑当前草稿"
+                  :disabled="debugLoading"
+                  @keydown.enter.meta.prevent="startDebugRun"
+                  @keydown.enter.ctrl.prevent="startDebugRun"
+                />
+                <span class="workflow-debug-textarea-hint">按 ⌘+Enter 快捷试跑</span>
+              </div>
+            </div>
+
+            <div class="workflow-debug-field">
+              <div class="workflow-debug-field__label">
+                <span>附件文本 (Attachments)</span>
+                <span class="workflow-debug-field__optional">可选</span>
+              </div>
+              <textarea
+                v-model="debugAttachmentsText"
+                rows="2"
+                placeholder="粘贴附件解析文本、补充数据等"
                 :disabled="debugLoading"
-                @click="retryDebugNode(node.id)"
-              >
-                重试节点
-              </button>
+              />
+            </div>
+          </div>
+
+          <div class="workflow-debug-actions">
+            <button
+              v-if="debugRun && !debugRunTerminal"
+              type="button"
+              class="workflow-debug-run-btn workflow-debug-run-btn--danger"
+              :disabled="debugLoading"
+              @click="cancelDebugRun"
+            >
+              <t-icon name="stop-circle" />
+              <span>停止试跑</span>
+            </button>
+            <button
+              v-else
+              type="button"
+              class="workflow-debug-run-btn workflow-debug-run-btn--primary"
+              :disabled="debugLoading || !debugQuery.trim()"
+              @click="startDebugRun"
+            >
+              <t-icon :name="debugLoading ? 'loading' : 'play-circle'" />
+              <span>{{ debugLoading ? '正在执行试跑…' : (debugRun ? '再次试跑' : '开始试跑') }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 右栏：执行监控与结果看板 -->
+        <div class="workflow-debug-right">
+          <!-- 运行中 / 完成态监控 -->
+          <div v-if="debugRun" class="workflow-debug-output-panel">
+            <!-- 运行指标摘要 -->
+            <div class="workflow-debug-metrics-bar">
+              <div class="workflow-debug-metrics-bar__left">
+                <span class="workflow-debug-run-id">#{{ debugRun.id ? debugRun.id.slice(-8) : '' }}</span>
+                <span class="workflow-debug-badge" :class="`is-${debugRun.status}`">
+                  {{ workflowRunStatusLabel(debugRun.status) }}
+                </span>
+              </div>
+              <div class="workflow-debug-metrics-bar__right">
+                <span v-if="debugRunDurationMs" class="workflow-debug-metric-item">
+                  <t-icon name="time" />
+                  <span>耗时 <strong>{{ debugRunDurationMs }}ms</strong></span>
+                </span>
+                <span v-if="debugRun.nodes?.length" class="workflow-debug-metric-item">
+                  <t-icon name="check-circle" />
+                  <span>节点 <strong>{{ debugRunSuccessCount }}/{{ debugRun.nodes.length }}</strong></span>
+                </span>
+              </div>
+            </div>
+
+            <!-- 全局报错提示 -->
+            <div v-if="debugRun.error_summary" class="workflow-debug-error-banner" role="alert">
+              <t-icon name="error-circle-filled" />
+              <div class="workflow-debug-error-banner__body">
+                <strong>执行遇到错误</strong>
+                <p>{{ debugRun.error_summary }}</p>
+              </div>
+            </div>
+
+            <!-- 最终输出回复 -->
+            <div v-if="debugRun.output_summary" class="workflow-debug-final-output">
+              <div class="workflow-debug-final-output__head">
+                <div class="workflow-debug-final-output__title">
+                  <t-icon name="chat" />
+                  <span>工作流最终输出</span>
+                </div>
+                <button
+                  type="button"
+                  class="workflow-link-button"
+                  title="复制最终回复文本"
+                  @click="copyDebugOutput(debugRun.output_summary)"
+                >
+                  <t-icon name="copy" />
+                  <span>复制结果</span>
+                </button>
+              </div>
+              <div class="workflow-debug-final-output__content">{{ debugRun.output_summary }}</div>
+            </div>
+
+            <!-- 节点执行流水线明细 -->
+            <div v-if="debugRun.nodes?.length" class="workflow-debug-timeline">
+              <div class="workflow-debug-timeline__title">节点流转轨迹 ({{ debugRun.nodes.length }})</div>
+              <div class="workflow-debug-nodes-list">
+                <div
+                  v-for="(node, nIdx) in debugRun.nodes"
+                  :key="node.id"
+                  class="workflow-debug-node-card"
+                  :class="`is-${node.status}`"
+                >
+                  <div class="workflow-debug-node-card__header">
+                    <div class="workflow-debug-node-card__index">{{ nIdx + 1 }}</div>
+                    <div class="workflow-debug-node-card__status-dot" :class="`is-${node.status}`" />
+                    <div class="workflow-debug-node-card__meta">
+                      <strong class="workflow-debug-node-card__name">{{ node.node_name }}</strong>
+                      <span class="workflow-debug-node-card__badge">{{ node.node_type || '节点' }}</span>
+                    </div>
+                    <div class="workflow-debug-node-card__extra">
+                      <span class="workflow-debug-node-card__duration">{{ node.duration_ms || 0 }}ms</span>
+                      <button
+                        v-if="node.status === 'failed'"
+                        type="button"
+                        class="workflow-debug-retry-node-btn"
+                        :disabled="debugLoading"
+                        title="单独重试此失败节点"
+                        @click="retryDebugNode(node.id)"
+                      >
+                        <t-icon name="refresh" />
+                        <span>重试</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div v-if="node.error_summary" class="workflow-debug-node-card__error">
+                    {{ node.error_summary }}
+                  </div>
+                  <div v-else-if="node.output_summary" class="workflow-debug-node-card__output">
+                    {{ node.output_summary }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 未运行时的就绪空状态 -->
+          <div v-else class="workflow-debug-empty-state">
+            <div class="workflow-debug-empty-state__icon-ring">
+              <t-icon name="play-circle" size="28px" />
+            </div>
+            <h4>工作流调试就绪</h4>
+            <p>在左侧输入测试参数并点击「开始试跑」，即可在此实时监控全链路节点流转、分支路由与最终输出。</p>
+            <div class="workflow-debug-empty-state__features">
+              <div class="workflow-debug-feature-tag">
+                <t-icon name="check-circle" />
+                <span>快照隔离运行</span>
+              </div>
+              <div class="workflow-debug-feature-tag">
+                <t-icon name="refresh" />
+                <span>单节点可重试</span>
+              </div>
+              <div class="workflow-debug-feature-tag">
+                <t-icon name="time" />
+                <span>全链路耗时追踪</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1382,7 +1568,7 @@ const onboardingSteps = [
   { title: '选一个模板', description: '最接近你需求的流程，会自动连线。' },
   { title: '补齐待配置项', description: '按右侧提示换成自己的知识库或接口。' },
   { title: '改节点文字', description: '把名称改成同事看得懂的说法。' },
-  { title: '校验与保存', description: '校验通过后，可点击底部“保存并试用”立即前往对话体验，或点击“保存并关闭”。' },
+  { title: '校验与试跑', description: '校验通过后，可点击底部“保存并试跑”打开试跑控制台，或点击“保存并关闭”。' },
 ];
 
 const nodePalette: Array<{ type: WorkflowNodeType; label: string; description: string; icon: string }> = [
@@ -1460,6 +1646,7 @@ const revisionConflict = ref<number | null>(null);
 
 /** 编辑器内试跑状态；运行数据来自服务端持久化记录，避免只依赖前端内存。 */
 const debugDrawerOpen = ref(false);
+const debugMinimized = ref(false);
 const debugQuery = ref('');
 const debugAttachmentsText = ref('');
 const debugRun = ref<WorkflowRun | null>(null);
@@ -1470,6 +1657,38 @@ const debugRunTerminal = computed(() => {
   const status = debugRun.value?.status;
   return status === 'succeeded' || status === 'partial' || status === 'failed' || status === 'canceled';
 });
+
+const debugRunDurationMs = computed(() => {
+  if (!debugRun.value?.nodes?.length) return 0;
+  return debugRun.value.nodes.reduce((acc, n) => acc + (n.duration_ms || 0), 0);
+});
+
+const debugRunSuccessCount = computed(() => {
+  if (!debugRun.value?.nodes?.length) return 0;
+  return debugRun.value.nodes.filter(n => n.status === 'succeeded').length;
+});
+
+function clearDebugInputs() {
+  debugQuery.value = '';
+  debugAttachmentsText.value = '';
+}
+
+function fillSampleDebugQuery() {
+  debugQuery.value = '请帮我梳理当前系统的核心功能特点，并给出两点改进建议。';
+}
+
+function copyDebugOutput(text?: string) {
+  if (!text) return;
+  if (navigator?.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      MessagePlugin.success('已复制到剪贴板');
+    }).catch(() => {
+      MessagePlugin.warning('复制失败，请手动选取');
+    });
+  } else {
+    MessagePlugin.info(text);
+  }
+}
 
 /** 画布是否有尚未发布的修改：保存时 revision 落后于最近发布记录的 draft_revision。 */
 const hasUnpublishedChanges = computed(() => {
@@ -3695,13 +3914,14 @@ function startDebugPolling() {
   }, 1000);
 }
 
-/** 打开试跑抽屉；父组件的“保存并试用”也复用这个入口。 */
+/** 打开试跑抽屉；父组件的“保存并试跑”也复用这个入口。 */
 function openDebugRun() {
   if (!props.agentId) {
     MessagePlugin.warning('请先保存工作流，再使用编辑器内试跑');
     return;
   }
   debugDrawerOpen.value = true;
+  debugMinimized.value = false;
 }
 
 function closeDebugRun() {
@@ -4084,152 +4304,740 @@ defineExpose({
 
 .workflow-debug-drawer {
   position: relative;
-  margin: 12px 48px 0 0;
+  margin-top: 12px;
+  margin-right: 0;
+  width: 100%;
   border: 1px solid var(--td-component-stroke);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--td-bg-color-container);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
+  box-shadow: 0 12px 32px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.04);
   overflow: hidden;
+  flex-shrink: 0;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+
+  &.is-minimized {
+    .workflow-debug-drawer__header {
+      border-bottom: none;
+    }
+  }
 }
 
 .workflow-debug-drawer__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 16px;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--td-bg-color-container) 95%, var(--td-brand-color) 5%);
   border-bottom: 1px solid var(--td-component-stroke);
+}
 
-  div {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
+.workflow-debug-drawer__title-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workflow-debug-drawer__badge-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
+  color: var(--td-brand-color);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.workflow-debug-drawer__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workflow-debug-drawer__headline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 
   strong {
     font-size: 14px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+    letter-spacing: -0.01em;
+  }
+}
+
+.workflow-debug-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+
+  &--revision {
+    background: var(--td-bg-color-secondarycontainer);
+    color: var(--td-text-color-secondary);
+    border: 1px solid var(--td-component-stroke);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
-  small {
-    color: var(--td-text-color-secondary);
-    font-size: 12px;
+  &--idle {
+    background: var(--td-bg-color-page);
+    color: var(--td-text-color-placeholder);
+    border: 1px solid var(--td-component-stroke);
   }
+
+  &--running {
+    background: color-mix(in srgb, var(--td-brand-color) 12%, transparent);
+    color: var(--td-brand-color);
+    border: 1px solid color-mix(in srgb, var(--td-brand-color) 30%, transparent);
+
+    .workflow-debug-pill__dot {
+      background: var(--td-brand-color);
+      animation: workflow-pulse-dot 1.4s ease-in-out infinite;
+    }
+  }
+
+  &--succeeded {
+    background: color-mix(in srgb, var(--td-success-color) 12%, transparent);
+    color: var(--td-success-color);
+    border: 1px solid color-mix(in srgb, var(--td-success-color) 30%, transparent);
+
+    .workflow-debug-pill__dot {
+      background: var(--td-success-color);
+    }
+  }
+
+  &--failed, &--canceled {
+    background: color-mix(in srgb, var(--td-error-color) 12%, transparent);
+    color: var(--td-error-color);
+    border: 1px solid color-mix(in srgb, var(--td-error-color) 30%, transparent);
+
+    .workflow-debug-pill__dot {
+      background: var(--td-error-color);
+    }
+  }
+
+  &--partial {
+    background: color-mix(in srgb, var(--td-warning-color) 12%, transparent);
+    color: var(--td-warning-color);
+    border: 1px solid color-mix(in srgb, var(--td-warning-color) 30%, transparent);
+
+    .workflow-debug-pill__dot {
+      background: var(--td-warning-color);
+    }
+  }
+
+  &__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+}
+
+.workflow-debug-drawer__sub {
+  font-size: 11px;
+  color: var(--td-text-color-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workflow-debug-drawer__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.workflow-debug-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+  background: var(--td-bg-color-container);
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover:not(:disabled) {
+    color: var(--td-brand-color);
+    border-color: var(--td-brand-color);
+    background: color-mix(in srgb, var(--td-brand-color) 5%, transparent);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.workflow-icon-button--close:hover {
+  color: var(--td-error-color);
+  background: color-mix(in srgb, var(--td-error-color) 10%, transparent);
 }
 
 .workflow-debug-drawer__body {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(280px, 1.2fr);
-  gap: 12px;
-  padding: 14px;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 16px;
+  padding: 14px 16px;
+  height: 310px;
+  box-sizing: border-box;
+  background: var(--td-bg-color-container);
+}
+
+/* 左侧参数区 */
+.workflow-debug-left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  padding-right: 14px;
+  border-right: 1px solid var(--td-component-stroke);
+}
+
+.workflow-debug-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-debug-section-head__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.workflow-debug-clear-btn {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--td-brand-color);
+  }
+}
+
+.workflow-debug-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .workflow-debug-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 0;
+  gap: 5px;
 
-  span {
+  &__label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-size: 12px;
     color: var(--td-text-color-secondary);
+    font-weight: 500;
   }
+
+  &__required {
+    font-size: 11px;
+    color: var(--td-brand-color);
+  }
+
+  &__optional {
+    font-size: 11px;
+    color: var(--td-text-color-placeholder);
+  }
+}
+
+.workflow-debug-textarea-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
 
   textarea {
     width: 100%;
-    min-height: 78px;
-    resize: vertical;
-    padding: 8px 10px;
+    min-height: 80px;
+    resize: none;
+    padding: 8px 10px 22px;
     border: 1px solid var(--td-component-stroke);
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--td-bg-color-page);
     color: var(--td-text-color-primary);
     font: inherit;
+    font-size: 13px;
     line-height: 1.5;
+    box-sizing: border-box;
+    transition: all 0.15s ease;
+
+    &:focus {
+      outline: none;
+      border-color: var(--td-brand-color);
+      background: var(--td-bg-color-container);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--td-brand-color) 12%, transparent);
+    }
+  }
+}
+
+.workflow-debug-textarea-hint {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--td-text-color-placeholder);
+  pointer-events: none;
+}
+
+.workflow-debug-field > textarea {
+  width: 100%;
+  min-height: 52px;
+  resize: none;
+  padding: 6px 10px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-page);
+  color: var(--td-text-color-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+
+  &:focus {
+    outline: none;
+    border-color: var(--td-brand-color);
+    background: var(--td-bg-color-container);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--td-brand-color) 12%, transparent);
   }
 }
 
 .workflow-debug-actions {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.workflow-debug-run-btn {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
+  width: 100%;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+
+  &--primary {
+    background: var(--td-brand-color);
+    color: #fff;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--td-brand-color) 35%, transparent);
+
+    &:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--td-brand-color) 88%, #000);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--td-brand-color) 45%, transparent);
+    }
+
+    &:active:not(:disabled) {
+      transform: translateY(0);
+    }
+  }
+
+  &--danger {
+    background: var(--td-error-color);
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--td-error-color) 88%, #000);
+    }
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+  }
+}
+
+/* 右侧流转监控与结果面板 */
+.workflow-debug-right {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 就绪空状态 */
+.workflow-debug-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: 16px;
+  box-sizing: border-box;
+
+  h4 {
+    margin: 12px 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+  }
+
+  p {
+    margin: 0 0 16px;
+    max-width: 420px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--td-text-color-secondary);
+  }
+}
+
+.workflow-debug-empty-state__icon-ring {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
+  color: var(--td-brand-color);
+  border: 1px dashed color-mix(in srgb, var(--td-brand-color) 30%, transparent);
+}
+
+.workflow-debug-empty-state__features {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
-.workflow-debug-run-summary {
-  grid-column: 1 / -1;
-  padding-top: 12px;
-  border-top: 1px solid var(--td-component-stroke);
+.workflow-debug-feature-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--td-bg-color-page);
+  border: 1px solid var(--td-component-stroke);
+  font-size: 11px;
+  color: var(--td-text-color-secondary);
 }
 
-.workflow-debug-run-summary__title {
+/* 运行态与流水线 */
+.workflow-debug-output-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workflow-debug-metrics-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--td-bg-color-page);
+  border: 1px solid var(--td-component-stroke);
+}
+
+.workflow-debug-metrics-bar__left,
+.workflow-debug-metrics-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-debug-run-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.workflow-debug-badge {
+  display: inline-flex;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+
+  &.is-running {
+    background: color-mix(in srgb, var(--td-brand-color) 15%, transparent);
+    color: var(--td-brand-color);
+  }
+  &.is-succeeded {
+    background: color-mix(in srgb, var(--td-success-color) 15%, transparent);
+    color: var(--td-success-color);
+  }
+  &.is-failed, &.is-canceled {
+    background: color-mix(in srgb, var(--td-error-color) 15%, transparent);
+    color: var(--td-error-color);
+  }
+  &.is-partial {
+    background: color-mix(in srgb, var(--td-warning-color) 15%, transparent);
+    color: var(--td-warning-color);
+  }
+}
+
+.workflow-debug-metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
   color: var(--td-text-color-secondary);
 
   strong {
     color: var(--td-text-color-primary);
-
-    &.is-succeeded { color: var(--td-success-color); }
-    &.is-partial { color: var(--td-warning-color); }
-    &.is-failed, &.is-canceled { color: var(--td-error-color); }
+    font-weight: 600;
   }
 }
 
-.workflow-debug-error {
-  margin: 8px 0 0;
-  color: var(--td-error-color);
-  font-size: 12px;
-}
-
-.workflow-debug-nodes {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.workflow-debug-node {
+.workflow-debug-error-banner {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 6px;
-  background: var(--td-bg-color-page);
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--td-error-color) 25%, transparent);
+  color: var(--td-error-color);
+  font-size: 12px;
+
+  &__body {
+    strong {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    p {
+      margin: 0;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+  }
 }
 
-.workflow-debug-node__status {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: var(--td-text-color-placeholder);
+.workflow-debug-final-output {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--td-brand-color) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--td-brand-color) 18%, transparent);
 
-  &.is-running { background: var(--td-brand-color); }
-  &.is-succeeded { background: var(--td-success-color); }
-  &.is-failed, &.is-canceled { background: var(--td-error-color); }
-  &.is-pending { background: var(--td-warning-color); }
-}
-
-.workflow-debug-node__main {
-  flex: 1;
-  min-width: 0;
-
-  strong, small, p {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
   }
 
-  strong { font-size: 13px; }
-  small { margin-top: 2px; color: var(--td-text-color-secondary); font-size: 11px; }
-  p { margin: 5px 0 0; color: var(--td-text-color-secondary); font-size: 11px; }
+  &__title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--td-brand-color);
+  }
+
+  &__content {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--td-text-color-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 120px;
+    overflow-y: auto;
+    padding: 6px 8px;
+    background: var(--td-bg-color-container);
+    border-radius: 6px;
+    border: 1px solid var(--td-component-stroke);
+  }
+}
+
+.workflow-debug-timeline {
+  &__title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--td-text-color-secondary);
+    margin-bottom: 8px;
+  }
+}
+
+.workflow-debug-nodes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-debug-node-card {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--td-bg-color-page);
+  border: 1px solid var(--td-component-stroke);
+  transition: all 0.15s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--td-brand-color) 35%, transparent);
+    background: var(--td-bg-color-container);
+  }
+
+  &.is-running {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--td-brand-color) 15%, transparent);
+  }
+
+  &.is-failed {
+    border-color: color-mix(in srgb, var(--td-error-color) 40%, transparent);
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__index {
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    color: var(--td-text-color-placeholder);
+    width: 14px;
+    text-align: center;
+  }
+
+  &__status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--td-text-color-placeholder);
+    flex-shrink: 0;
+
+    &.is-running {
+      background: var(--td-brand-color);
+      animation: workflow-pulse-dot 1.4s infinite;
+    }
+    &.is-succeeded { background: var(--td-success-color); }
+    &.is-failed, &.is-canceled { background: var(--td-error-color); }
+    &.is-pending { background: var(--td-warning-color); }
+  }
+
+  &__meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--td-text-color-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--td-bg-color-secondarycontainer);
+    color: var(--td-text-color-placeholder);
+    flex-shrink: 0;
+  }
+
+  &__extra {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  &__duration {
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    color: var(--td-text-color-placeholder);
+  }
+
+  &__error {
+    margin-top: 6px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
+    color: var(--td-error-color);
+    font-size: 11px;
+    line-height: 1.4;
+    word-break: break-all;
+  }
+
+  &__output {
+    margin-top: 6px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    background: var(--td-bg-color-container);
+    border: 1px solid var(--td-component-stroke);
+    color: var(--td-text-color-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 80px;
+    overflow-y: auto;
+  }
+}
+
+.workflow-debug-retry-node-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--td-brand-color) 30%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--td-brand-color);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--td-brand-color) 10%, transparent);
+  }
+}
+
+@keyframes workflow-pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.6; }
 }
 
 .workflow-icon-button {

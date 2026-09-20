@@ -121,8 +121,19 @@ func (s *knowledgeBaseService) resolveStoreGroups(
 			sid := key.storeID
 			storeIDPtr = &sid
 		}
+		groupCtx := resolveCtx
+		if storeIDPtr == nil || *storeIDPtr == "" {
+			tenantInfo, ok := types.TenantInfoFromContext(groupCtx)
+			if !ok || tenantInfo == nil || tenantInfo.ID != key.tenantID {
+				if s.tenantRepo != nil {
+					if t, err := s.tenantRepo.GetTenantByID(groupCtx, key.tenantID); err == nil && t != nil {
+						groupCtx = context.WithValue(groupCtx, types.TenantInfoContextKey, t)
+					}
+				}
+			}
+		}
 		engine, err := retriever.CreateRetrieveEngineForKB(
-			resolveCtx, s.retrieveEngine, s.ownership, key.tenantID, storeIDPtr)
+			groupCtx, s.retrieveEngine, s.ownership, key.tenantID, storeIDPtr)
 		if err != nil {
 			return nil, classifyFactoryError(ctx, err, key.tenantID, key.storeID)
 		}

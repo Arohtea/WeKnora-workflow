@@ -1839,13 +1839,13 @@
                     variant="outline"
                     :loading="workflowRunLoading"
                     :disabled="saving || editorInitializing"
-                    title="保存工作流配置并前往对话页面体验"
+                    title="保存工作流配置并试跑草稿"
                     @click="handleWorkflowRun"
                   >
                     <template #icon>
                       <t-icon name="play-circle" />
                     </template>
-                    <span>保存并试用</span>
+                    <span>保存并试跑</span>
                   </t-button>
                   <t-button
                     v-if="!props.readOnly"

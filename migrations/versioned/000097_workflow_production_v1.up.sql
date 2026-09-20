@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     CONSTRAINT fk_workflow_runs_agent
         FOREIGN KEY (agent_id, tenant_id) REFERENCES custom_agents(id, tenant_id) ON DELETE CASCADE
 );
+ALTER TABLE workflow_runs
+    ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS input_payload JSONB,
+    ADD COLUMN IF NOT EXISTS run_mode VARCHAR(16) NOT NULL DEFAULT 'production',
+    ADD COLUMN IF NOT EXISTS requested_by VARCHAR(36) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS retry_of_run_id VARCHAR(36) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMP WITH TIME ZONE,
+    ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP WITH TIME ZONE;
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant_agent_time
     ON workflow_runs (tenant_id, agent_id, started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant_status_time
@@ -126,6 +135,15 @@ CREATE TABLE IF NOT EXISTS workflow_run_nodes (
     CONSTRAINT fk_workflow_run_nodes_run
         FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
 );
+ALTER TABLE workflow_run_nodes
+    ADD COLUMN IF NOT EXISTS branch_id VARCHAR(36) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS retry_of BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS task_id VARCHAR(128) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS retryable BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS input_payload JSONB,
+    ADD COLUMN IF NOT EXISTS output_payload JSONB,
+    ADD COLUMN IF NOT EXISTS error_code VARCHAR(64) NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_run_sequence
     ON workflow_run_nodes (run_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_agent_status_time

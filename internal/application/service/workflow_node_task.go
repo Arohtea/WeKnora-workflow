@@ -71,8 +71,19 @@ func (s *WorkflowNodeTaskService) Handle(ctx context.Context, task *asynq.Task) 
 		return fmt.Errorf("workflow node wake identity is incomplete: %w", asynq.SkipRetry)
 	}
 
+	caller := types.Caller{
+		TenantID: wake.TenantID,
+		UserID:   wake.Initiator.UserID,
+		Role:     wake.Initiator.Role,
+	}.Normalize()
+	ctx = types.WithCaller(ctx, caller)
 	ctx = types.WithExecutionTenant(ctx, wake.TenantID)
 	ctx = wake.Initiator.Apply(ctx)
+	if s.agent != nil && s.agent.tenantService != nil {
+		if tenant, err := s.agent.tenantService.GetTenantByID(ctx, wake.TenantID); err == nil && tenant != nil {
+			ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
+		}
+	}
 	if err := s.releaseDueWorkflowRetries(ctx, wake.RunID); err != nil {
 		return err
 	}
@@ -108,6 +119,12 @@ func (s *WorkflowNodeTaskService) Handle(ctx context.Context, task *asynq.Task) 
 		return fmt.Errorf("decode workflow pending node payload: %w", err)
 	}
 	if pending.Initiator.UserID != "" {
+		caller = types.Caller{
+			TenantID: wake.TenantID,
+			UserID:   pending.Initiator.UserID,
+			Role:     pending.Initiator.Role,
+		}.Normalize()
+		ctx = types.WithCaller(ctx, caller)
 		ctx = pending.Initiator.Apply(ctx)
 	}
 	if pending.NotBefore != nil && time.Now().Before(*pending.NotBefore) {
