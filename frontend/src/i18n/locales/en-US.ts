@@ -3566,6 +3566,10 @@ export default {
     referencesWebCount: 'Referenced {count} web result(s)',
     referencesDocAndWebCount: 'Referenced {docCount} document(s) and {webCount} web page(s)',
     referencesDrawerTitle: 'Sources',
+    workflowGraph: 'Execution graph',
+    expandWorkflowGraph: 'Expand execution graph',
+    collapseWorkflowGraph: 'Collapse execution graph',
+    workflowRunning: 'Workflow is running',
     referencesDrawerTitleWeb: 'Web sources',
     referencesDrawerTitleDocs: 'Document sources',
     referencesDrawerTitleTools: 'Tool results',
@@ -7197,10 +7201,36 @@ export default {
     title: 'Workflows',
     subtitle: 'Standardize multi-step processes like retrieval, decision, and response for deterministic results.',
     createWorkflow: 'Create Workflow',
+    importWorkflow: 'Import Workflow',
+    exportWorkflow: 'Export Workflow',
+    workflowNode: 'Workflow Node',
+    nodeOutput: 'Node Output',
+    workflowGraph: 'Workflow Graph',
+    liveTrace: 'Live Trace',
+    nodeType: {
+      start: 'Start Node',
+      end: 'End Node',
+      llm: 'LLM Processing',
+      'llm-decision': 'Routing Decision',
+      'knowledge-retrieval': 'Knowledge Retrieval',
+      'http-request': 'HTTP Request',
+      tool: 'Tool Call',
+    },
     messages: {
       created: 'Workflow created successfully',
+      updated: 'Workflow updated successfully',
       deleted: 'Workflow deleted',
       deleteFailed: 'Failed to delete workflow',
+      saveFailed: 'Failed to save workflow',
+      nameRequired: 'Enter a workflow name',
+      importSuccess: 'Workflow imported successfully',
+      importFailed: 'Failed to import workflow',
+      exportSuccess: 'Workflow exported successfully',
+      exportFailed: 'Failed to export workflow',
+    },
+    confirm: {
+      importOverwriteTitle: 'Confirm workflow import',
+      importOverwrite: 'Importing a new workflow will replace all nodes and connections on the current canvas. Continue?',
     },
     delete: {
       confirmTitle: 'Delete Workflow',
@@ -7222,4 +7252,3 @@ export default {
     },
   }
 }
-

@@ -5,6 +5,18 @@
         <div class="workflow-toolbar-title-wrap">
           <h3 class="workflow-title">流程编排</h3>
           <span class="workflow-stats-badge">{{ flowNodes.length }} 节点 · {{ flowEdges.length }} 连线</span>
+          <span class="workflow-revision-badge" :title="`草稿修订号 r${draftRevision}`">
+            草稿 r{{ draftRevision }}
+          </span>
+          <span class="workflow-revision-badge" :title="publishedVersion ? `已发布 v${publishedVersion}` : '尚未发布'">
+            {{ publishedVersion ? `已发布 v${publishedVersion}` : '未发布' }}
+          </span>
+          <span
+            class="workflow-unpublished-badge"
+            :class="{ 'is-dirty': hasUnpublishedChanges }"
+          >
+            {{ hasUnpublishedChanges ? '有未发布修改' : '已是最新' }}
+          </span>
         </div>
         <p class="workflow-subtitle">按照预定流程序列处理提问，结合知识库检索、模型推理与外部工具输出精准回答。</p>
       </div>
@@ -98,6 +110,26 @@
         >
           <t-icon name="check-circle" />
           <span>校验</span>
+        </button>
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--debug"
+          :disabled="disabled || !agentId || debugLoading"
+          title="使用当前草稿快照在编辑器内试跑"
+          @click="openDebugRun"
+        >
+          <t-icon :name="debugLoading ? 'loading' : 'play-circle'" />
+          <span>试跑</span>
+        </button>
+        <button
+          type="button"
+          class="workflow-toolbar-btn workflow-toolbar-btn--primary"
+          :disabled="!canPublish"
+          :title="hasUnpublishedChanges ? '校验并发布当前草稿为新版本' : '发布当前草稿为新版本'"
+          @click="publishDefinition"
+        >
+          <t-icon :name="publishInFlight ? 'loading' : 'cloud-upload'" />
+          <span>{{ publishInFlight ? '发布中…' : '发布' }}</span>
         </button>
       </div>
     </div>
@@ -349,6 +381,34 @@
               />
               <small class="workflow-field-help">用于在画布中直观区分步骤，便于理解与协作。</small>
             </label>
+          </div>
+
+          <!-- 分支模式：仅对非开始节点有意义，开始节点没有上游路由语义 -->
+          <div v-if="selectedNode.data.workflowType !== 'start'" class="workflow-inspector-section">
+            <div class="workflow-section-title">多分支执行方式</div>
+            <div class="workflow-branch-mode">
+              <button
+                type="button"
+                class="workflow-branch-mode-option"
+                :class="{ 'is-active': selectedNode.data.branchMode !== 'all_match' }"
+                :disabled="disabled"
+                @click="updateNodeBranchMode('first_match')"
+              >
+                <strong>只走第一条命中</strong>
+                <small>按出边顺序判断，命中第一个条件为真的分支后就停止，其余分支不执行。适合"二选一"的互斥判断。</small>
+              </button>
+              <button
+                type="button"
+                class="workflow-branch-mode-option"
+                :class="{ 'is-active': selectedNode.data.branchMode === 'all_match' }"
+                :disabled="disabled"
+                @click="updateNodeBranchMode('all_match')"
+              >
+                <strong>并行走全部命中</strong>
+                <small>所有条件为真的分支同时执行，适合一次触发多个下游动作（如同时查库并调用接口），再由各自的输出节点汇总。</small>
+              </button>
+            </div>
+            <small class="workflow-field-help">仅当该节点有多条出边时才会生效；单条出边不会触发分支选择。</small>
           </div>
 
           <!-- 知识库检索节点 -->
@@ -1081,6 +1141,120 @@
       </aside>
     </div>
 
+    <!-- 修订冲突：不提供覆盖操作，只提示刷新，避免用陈旧草稿覆盖他人改动 -->
+    <div v-if="revisionConflict !== null" class="workflow-revision-conflict" role="alert">
+      <t-icon name="error-circle" />
+      <div class="workflow-revision-conflict-body">
+        <strong>草稿已被其他更新修改</strong>
+        <span>
+          服务端当前草稿修订号为
+          <code>r{{ revisionConflict || '未知' }}</code>，你的画布基于 <code>r{{ draftRevision }}</code>。
+          请重新加载最新内容后再进行发布，不要直接覆盖。
+        </span>
+      </div>
+      <button type="button" class="workflow-toolbar-btn" @click="requestReload">
+        <t-icon name="refresh" />
+        <span>重新加载</span>
+      </button>
+    </div>
+
+    <aside v-if="debugDrawerOpen" class="workflow-debug-drawer" aria-label="工作流试跑">
+      <div class="workflow-debug-drawer__header">
+        <div>
+          <strong>草稿试跑</strong>
+          <small>只执行当前草稿快照，不会改变正式版本。</small>
+        </div>
+        <button type="button" class="workflow-icon-button" title="关闭试跑面板" @click="closeDebugRun">
+          <t-icon name="close" />
+        </button>
+      </div>
+      <div class="workflow-debug-drawer__body">
+        <label class="workflow-debug-field">
+          <span>输入问题</span>
+          <textarea v-model="debugQuery" rows="4" placeholder="输入一条样例问题，试跑当前草稿" :disabled="debugLoading" />
+        </label>
+        <label class="workflow-debug-field">
+          <span>附件文本（可选）</span>
+          <textarea v-model="debugAttachmentsText" rows="3" placeholder="粘贴附件解析文本" :disabled="debugLoading" />
+        </label>
+        <div class="workflow-debug-actions">
+          <button
+            v-if="debugRun && !debugRunTerminal"
+            type="button"
+            class="workflow-toolbar-btn workflow-toolbar-btn--danger"
+            :disabled="debugLoading"
+            @click="cancelDebugRun"
+          >
+            <t-icon name="stop-circle" />
+            <span>停止</span>
+          </button>
+          <button
+            v-else
+            type="button"
+            class="workflow-toolbar-btn workflow-toolbar-btn--primary"
+            :disabled="debugLoading || !debugQuery.trim()"
+            @click="startDebugRun"
+          >
+            <t-icon :name="debugLoading ? 'loading' : 'play-circle'" />
+            <span>{{ debugLoading ? '启动中…' : '开始试跑' }}</span>
+          </button>
+          <button
+            v-if="debugRun && debugRunTerminal"
+            type="button"
+            class="workflow-toolbar-btn"
+            :disabled="debugLoading"
+            @click="retryDebugRun"
+          >
+            <t-icon name="refresh" />
+            <span>整次重跑</span>
+          </button>
+        </div>
+        <div v-if="debugRun" class="workflow-debug-run-summary">
+          <div class="workflow-debug-run-summary__title">
+            <span>运行 {{ debugRun.id }}</span>
+            <strong :class="`is-${debugRun.status}`">{{ workflowRunStatusLabel(debugRun.status) }}</strong>
+          </div>
+          <p v-if="debugRun.error_summary" class="workflow-debug-error">{{ debugRun.error_summary }}</p>
+          <div v-if="debugRun.nodes?.length" class="workflow-debug-nodes">
+            <div v-for="node in debugRun.nodes" :key="node.id" class="workflow-debug-node">
+              <span class="workflow-debug-node__status" :class="`is-${node.status}`" />
+              <div class="workflow-debug-node__main">
+                <strong>{{ node.node_name }}</strong>
+                <small>{{ workflowNodeStatusLabel(node.status) }} · {{ node.duration_ms || 0 }}ms</small>
+                <p v-if="node.error_summary">{{ node.error_summary }}</p>
+                <p v-else-if="node.output_summary">{{ node.output_summary }}</p>
+              </div>
+              <button
+                v-if="node.status === 'failed'"
+                type="button"
+                class="workflow-link-button"
+                :disabled="debugLoading"
+                @click="retryDebugNode(node.id)"
+              >
+                重试节点
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 发布前结构化校验问题：按 node_id/edge_id 一键定位到画布 -->
+    <div v-if="publishIssues.length > 0" class="workflow-publish-issues" role="alert">
+      <div class="workflow-publish-issues-title">发布前校验未通过（{{ publishIssues.length }}）</div>
+      <ul>
+        <li v-for="(issue, index) in publishIssues" :key="`${issue.code}-${index}`">
+          <button type="button" class="workflow-publish-issue" @click="focusValidationIssue([issue])">
+            <code class="workflow-publish-issue-code">{{ issue.code }}</code>
+            <span>{{ issue.message }}</span>
+            <em v-if="issue.node_id">节点：{{ issue.node_id }}</em>
+            <em v-else-if="issue.edge_id">连线：{{ issue.edge_id }}</em>
+            <em v-else-if="issue.field_path">{{ issue.field_path }}</em>
+          </button>
+        </li>
+      </ul>
+    </div>
+
     <div v-if="validationMessage" class="workflow-validation" :class="`workflow-validation--${validationStatus}`" :role="validationStatus === 'error' ? 'alert' : 'status'">
       <t-icon :name="validationIcon" />
       <span>{{ validationMessage }}</span>
@@ -1098,6 +1272,8 @@ import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next';
 import { copyToClipboard } from '@/utils/clipboard';
 import { exportWorkflowPackage, parseWorkflowJSON, readJSONFile } from '@/utils/workflowExportImport';
 import type {
+  CustomAgentConfig,
+  WorkflowBranchMode,
   WorkflowCatalog,
   WorkflowCatalogService,
   WorkflowCatalogSkill,
@@ -1108,6 +1284,18 @@ import type {
   WorkflowEdge,
   WorkflowNode,
   WorkflowNodeType,
+  WorkflowRun,
+  WorkflowValidationIssue,
+} from '@/api/agent';
+import {
+  cancelWorkflowRun,
+  getWorkflowRun,
+  publishWorkflow,
+  previewWorkflowImport,
+  retryWorkflowNode,
+  retryWorkflowRun,
+  startWorkflowDebugRun,
+  validateWorkflowDefinition,
 } from '@/api/agent';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
@@ -1126,6 +1314,8 @@ interface WorkflowNodeData {
   workflowType: WorkflowNodeType;
   name: string;
   config: Record<string, any>;
+  /** 分支模式：控制该节点多条出边的执行策略，默认 first_match。 */
+  branchMode: WorkflowBranchMode;
 }
 
 interface WorkflowEdgeData {
@@ -1143,12 +1333,33 @@ const props = withDefaults(defineProps<{
   knowledgeBaseOptions?: KnowledgeBaseOption[];
   sandboxConfigId?: string;
   disabled?: boolean;
+  /** 当前智能体 ID；未保存的新智能体为空，此时禁用发布。 */
+  agentId?: string;
+  /** 当前草稿修订号，来自后端 draft_revision；用于展示与发布乐观锁。 */
+  draftRevision?: number;
+  /** 已发布版本号，来自后端 published_version；0 表示从未发布。 */
+  publishedVersion?: number;
+  /** 最近一次发布时的草稿修订号；与 draftRevision 比较可判断是否有未发布修改。 */
+  publishedDraftRevision?: number;
+  /** 父组件是否正在执行发布（含保存草稿）流程。 */
+  publishing?: boolean;
+  /**
+   * 保存当前草稿并返回最新 revision 的回调，由父组件注入（复用现有 updateAgent）。
+   * 发布前必须先把画布落库，否则发布会拿到与画布不一致的 revision。
+   * 返回 null 表示保存失败，此时中断发布。
+   */
+  saveDraft?: () => Promise<number | null>;
 }>(), {
   modelValue: null,
   catalog: null,
   knowledgeBaseOptions: () => [],
   sandboxConfigId: '',
   disabled: false,
+  agentId: '',
+  draftRevision: 0,
+  publishedVersion: 0,
+  publishedDraftRevision: 0,
+  publishing: false,
 });
 
 const emit = defineEmits<{
@@ -1159,6 +1370,12 @@ const emit = defineEmits<{
   (event: 'manage-knowledge-bases'): void;
   (event: 'manage-mcp'): void;
   (event: 'run'): void;
+  /** 发布成功：父组件刷新草稿 revision / 已发布版本。 */
+  (event: 'published', payload: { version: number; draftRevision: number }): void;
+  /** 发布前发现未保存修改或修订冲突，父组件负责先保存草稿或重新加载智能体。 */
+  (event: 'publish-request', payload: { expectedRevision: number }): void;
+  /** 修订冲突后用户选择重新加载：父组件重新拉取智能体详情。 */
+  (event: 'reload'): void;
 }>();
 
 const onboardingSteps = [
@@ -1234,6 +1451,36 @@ const templateGalleryOpen = ref<boolean | null>(null);
 const appliedTemplateId = ref('');
 let lastEmitted = '';
 
+/** 发布流程本地状态：避免按钮在请求期间被重复点击。 */
+const publishInFlight = ref(false);
+/** 发布前结构化校验发现的问题；按节点/连线定位并展示。 */
+const publishIssues = ref<WorkflowValidationIssue[]>([]);
+/** 修订冲突时后端回传的当前 revision；非 null 时展示"重新加载"提示。 */
+const revisionConflict = ref<number | null>(null);
+
+/** 编辑器内试跑状态；运行数据来自服务端持久化记录，避免只依赖前端内存。 */
+const debugDrawerOpen = ref(false);
+const debugQuery = ref('');
+const debugAttachmentsText = ref('');
+const debugRun = ref<WorkflowRun | null>(null);
+const debugLoading = ref(false);
+let debugPollTimer: ReturnType<typeof setInterval> | null = null;
+
+const debugRunTerminal = computed(() => {
+  const status = debugRun.value?.status;
+  return status === 'succeeded' || status === 'partial' || status === 'failed' || status === 'canceled';
+});
+
+/** 画布是否有尚未发布的修改：保存时 revision 落后于最近发布记录的 draft_revision。 */
+const hasUnpublishedChanges = computed(() => {
+  // 从未发布过时，只要有草稿内容（非空白默认流程）就视为待发布。
+  if (!props.publishedVersion) return true;
+  return props.draftRevision > props.publishedDraftRevision;
+});
+
+/** 发布按钮是否可用：需要已保存的智能体、非内置/只读、且不在请求中。 */
+const canPublish = computed(() => Boolean(props.agentId) && !props.disabled && !publishInFlight.value && !props.publishing);
+
 const { fitView, screenToFlowCoordinate } = useVueFlow();
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -1272,10 +1519,11 @@ function defaultConfig(type: WorkflowNodeType): Record<string, any> {
 
 function defaultDefinition(): WorkflowDefinition {
   return {
-    version: 1,
+    version: 2,
+    schema_version: 2,
     nodes: [
-      { id: 'start', type: 'start', name: '开始', position: { x: 80, y: 160 }, config: {} },
-      { id: 'end', type: 'end', name: '结束', position: { x: 420, y: 160 }, config: { text_template: '{{input.query}}' } },
+      { id: 'start', type: 'start', name: '开始', branch_mode: 'first_match', position: { x: 80, y: 160 }, config: {} },
+      { id: 'end', type: 'end', name: '结束', branch_mode: 'first_match', position: { x: 420, y: 160 }, config: { text_template: '{{input.query}}' } },
     ],
     edges: [{ id: 'start-end', source: 'start', target: 'end', order: 0, is_default: false }],
     viewport: { x: 0, y: 0, zoom: 1 },
@@ -1284,19 +1532,38 @@ function defaultDefinition(): WorkflowDefinition {
 
 function normalizeDefinition(value?: WorkflowDefinition | null): WorkflowDefinition {
   const definition = value && value.nodes?.length ? clone(value) : defaultDefinition();
-  definition.version ||= 1;
+  const schemaVersion = Number(definition.schema_version || definition.version || 1);
+  const isLegacySchema = !Number.isFinite(schemaVersion) || schemaVersion < 2;
+  const outgoingCount = new Map<string, number>();
+  for (const edge of definition.edges || []) {
+    outgoingCount.set(edge.source, (outgoingCount.get(edge.source) || 0) + 1);
+  }
+  const orderBySource = new Map<string, number>();
+  definition.version = 2;
+  definition.schema_version = 2;
   definition.nodes = (definition.nodes || []).map((node) => ({
     ...node,
     name: node.name || node.id,
     position: { x: Number(node.position?.x) || 0, y: Number(node.position?.y) || 0 },
+    branch_mode: node.branch_mode === 'all_match' || node.branch_mode === 'first_match'
+      ? node.branch_mode
+      : isLegacySchema && (outgoingCount.get(node.id) || 0) > 1
+        ? 'all_match'
+        : 'first_match',
     config: node.config && typeof node.config === 'object' ? node.config : defaultConfig(node.type),
   }));
-  definition.edges = (definition.edges || []).map((edge, index) => ({
-    ...edge,
-    id: edge.id || `edge-${index + 1}`,
-    order: Number.isFinite(edge.order) ? edge.order : index,
-    is_default: !!edge.is_default,
-  }));
+  definition.edges = (definition.edges || []).map((edge, index) => {
+    const sourceOrder = orderBySource.get(edge.source) || 0;
+    const hasExplicitOrder = edge.order !== undefined && edge.order !== null && Number.isFinite(Number(edge.order));
+    const order = isLegacySchema || !hasExplicitOrder ? sourceOrder : Number(edge.order);
+    orderBySource.set(edge.source, sourceOrder + 1);
+    return {
+      ...edge,
+      id: edge.id || `edge-${index + 1}`,
+      order,
+      is_default: !!edge.is_default,
+    };
+  });
   definition.viewport = {
     x: Number(definition.viewport?.x) || 0,
     y: Number(definition.viewport?.y) || 0,
@@ -1318,10 +1585,8 @@ function loadDefinition(value?: WorkflowDefinition | null) {
     type: 'default',
     label: node.name,
     position: { x: node.position.x, y: node.position.y },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
     class: nodeClass(node.type),
-    data: { workflowType: node.type, name: node.name, config: clone(node.config || defaultConfig(node.type)) },
+    data: { workflowType: node.type, name: node.name, config: clone(node.config || defaultConfig(node.type)), branchMode: node.branch_mode === 'all_match' ? 'all_match' : 'first_match' },
     draggable: !props.disabled,
     deletable: !props.disabled,
   }));
@@ -1357,11 +1622,13 @@ function loadDefinition(value?: WorkflowDefinition | null) {
 
 function toDefinition(): WorkflowDefinition {
   return {
-    version: 1,
+    version: 2,
+    schema_version: 2,
     nodes: flowNodes.value.map((node): WorkflowNode => ({
       id: node.id,
       type: node.data.workflowType,
       name: node.data.name,
+      branch_mode: node.data.branchMode === 'all_match' ? 'all_match' : 'first_match',
       position: { x: Number(node.position.x) || 0, y: Number(node.position.y) || 0 },
       config: clone(node.data.config || {}),
     })),
@@ -1401,6 +1668,7 @@ function captureCurrentSnapshot(): string {
       id: node.id,
       type: node.data.workflowType,
       name: node.data.name,
+      branch_mode: node.data.branchMode === 'all_match' ? 'all_match' : 'first_match',
       position: { x: Number(node.position.x) || 0, y: Number(node.position.y) || 0 },
       config: clone(node.data.config || {}),
     })),
@@ -1464,7 +1732,7 @@ function restoreSnapshot(snapshotStr: string) {
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
       class: nodeClass(node.type),
-      data: { workflowType: node.type, name: node.name, config: clone(node.config || defaultConfig(node.type)) },
+      data: { workflowType: node.type, name: node.name, config: clone(node.config || defaultConfig(node.type)), branchMode: node.branch_mode === 'all_match' ? 'all_match' : 'first_match' },
       draggable: !props.disabled,
       deletable: !props.disabled,
     }));
@@ -1602,6 +1870,7 @@ onBeforeUnmount(() => {
   if (snapshotDebounceTimer) {
     clearTimeout(snapshotDebounceTimer);
   }
+  stopDebugPolling();
 });
 
 watch(
@@ -2344,6 +2613,17 @@ function updateNodeName(name: string) {
   updateSelectedNode((node) => { node.data.name = name.trim() || node.id; });
 }
 
+/**
+ * 修改选中节点的分支执行策略。
+ * 语义差异：first_match=按出边稳定顺序只走第一个条件命中的分支（互斥路由）；
+ * all_match=所有条件命中的分支并行执行（扇出后由各自终点汇聚）。
+ *
+ * @param mode 目标分支模式。
+ */
+function updateNodeBranchMode(mode: WorkflowBranchMode) {
+  updateSelectedNode((node) => { node.data.branchMode = mode; });
+}
+
 function updateConfig(key: string, value: unknown) {
   updateSelectedNode((node) => { node.data.config[key] = value; });
 }
@@ -2654,7 +2934,7 @@ function addNode(type: WorkflowNodeType, position?: { x: number; y: number }) {
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
     class: nodeClass(type),
-    data: { workflowType: type, name, config: defaultConfig(type) },
+    data: { workflowType: type, name, config: defaultConfig(type), branchMode: 'first_match' },
     draggable: true,
     deletable: true,
   });
@@ -3243,6 +3523,265 @@ function validateDefinition(): boolean {
   return passValidation();
 }
 
+/**
+ * 把结构化校验问题聚焦回画布：优先选中出问题的连线，其次节点。
+ * 后端返回 code 是机器可读标识，这里用 message 直接展示给用户，
+ * 不把它翻译成中文以免与后端文案脱节。
+ *
+ * @param issues 后端返回的校验问题列表。
+ */
+function focusValidationIssue(issues: WorkflowValidationIssue[]) {
+  const first = issues[0];
+  if (!first) return;
+  if (first.edge_id && flowEdges.value.some((edge) => edge.id === first.edge_id)) {
+    selectedNodeId.value = '';
+    selectedEdgeId.value = first.edge_id;
+  } else if (first.node_id && flowNodes.value.some((node) => node.id === first.node_id)) {
+    selectedNodeId.value = first.node_id;
+    selectedEdgeId.value = '';
+  }
+}
+
+/**
+ * 发布当前工作流草稿。
+ *
+ * 顺序固定为"先落库 → 结构化校验 → 发布"：
+ * 1. 发布接口按 expected_revision 做乐观锁，如果画布与库里的草稿不一致，
+ *    发布出去的就是旧内容，所以必须先把当前画布保存成新 revision；
+ * 2. 再调 validate 拿结构化问题，把用户直接定位到出问题的节点/连线；
+ * 3. 最后 publish 生成不可变版本。
+ *
+ * 修订冲突（409）时不覆盖、不重试，只提示刷新并展示服务端当前 revision。
+ */
+async function publishDefinition() {
+  if (!props.agentId || publishInFlight.value || props.disabled) return;
+
+  // 本地静态校验先兜一层：能立刻定位的错误不必往返后端。
+  if (!validateDefinition()) return;
+
+  publishIssues.value = [];
+  revisionConflict.value = null;
+  publishInFlight.value = true;
+  try {
+    // 发布前必须先把画布落库，否则 expected_revision 与内容不匹配。
+    let revision = props.draftRevision;
+    if (props.saveDraft) {
+      const saved = await props.saveDraft();
+      if (saved === null) return; // 保存失败，父组件已提示，直接中断
+      revision = saved;
+    }
+
+    const validated = await validateWorkflowDefinition(props.agentId, cloneAgentConfigForPublish());
+    const issues = Array.isArray(validated?.data) ? validated.data : [];
+    if (issues.length > 0) {
+      publishIssues.value = issues;
+      validationStatus.value = 'error';
+      validationMessage.value = `发布前校验发现 ${issues.length} 个问题：${issues[0].message}`;
+      emit('validation-error', validationMessage.value);
+      focusValidationIssue(issues);
+      MessagePlugin.error(validationMessage.value);
+      return;
+    }
+
+    const result = await publishWorkflow(props.agentId, revision);
+    const version = result?.data?.version ?? 0;
+    const publishedDraftRevision = result?.data?.draft_revision ?? revision;
+    validationStatus.value = 'success';
+    validationMessage.value = `已发布版本 v${version}`;
+    emit('validation-error', '');
+    emit('published', { version, draftRevision: publishedDraftRevision });
+    MessagePlugin.success(`已发布为版本 v${version}`);
+  } catch (error: any) {
+    handlePublishError(error);
+  } finally {
+    publishInFlight.value = false;
+  }
+}
+
+/**
+ * 组装发布校验用的配置载荷。
+ * 后端 validate 先通过 agent_type 确认配置属于工作流，再校验 workflow 定义；
+ * 编辑器只提交校验必需的类型标记和当前画布，其他配置已在发布前保存草稿时落库。
+ */
+function cloneAgentConfigForPublish(): CustomAgentConfig {
+  return {
+    agent_type: 'workflow',
+    workflow: toDefinition(),
+  };
+}
+
+/**
+ * 统一处理发布失败：区分修订冲突与普通失败。
+ * 请求层会把后端 { error: { code, message, details } } 原样抛出，
+ * 因此冲突时可以从 error.details.current_revision 读到服务端 revision。
+ *
+ * @param error 请求层抛出的错误对象。
+ */
+function handlePublishError(error: any) {
+  const status = error?.$httpStatus ?? error?.status;
+  if (status === 409) {
+    const currentRevision = error?.error?.details?.current_revision;
+    revisionConflict.value = typeof currentRevision === 'number' ? currentRevision : 0;
+    validationStatus.value = 'error';
+    // 冲突时绝不静默覆盖：清楚告诉用户库里已经是新版，需要刷新后重做。
+    validationMessage.value = revisionConflict.value
+      ? `草稿已被其他更新修改：服务端当前修订号为 r${revisionConflict.value}，你的画布基于 r${props.draftRevision}。请先重新加载最新内容，再重新做出你的修改，切勿直接覆盖。`
+      : `草稿已被其他更新修改，服务端修订号已变化。请先重新加载最新内容，再重新做出你的修改，切勿直接覆盖。`;
+    emit('validation-error', validationMessage.value);
+    MessagePlugin.warning(validationMessage.value);
+    return;
+  }
+  const message = error?.message || '发布失败，请稍后重试。';
+  validationStatus.value = 'error';
+  validationMessage.value = message;
+  emit('validation-error', message);
+  MessagePlugin.error(message);
+}
+
+/** 用户在冲突提示中点击"重新加载"：交给父组件重新拉取智能体详情。 */
+function requestReload() {
+  revisionConflict.value = null;
+  emit('reload');
+}
+
+const workflowRunStatusLabels: Record<string, string> = {
+  running: '运行中',
+  succeeded: '成功',
+  partial: '部分成功',
+  failed: '失败',
+  canceled: '已取消',
+};
+
+const workflowNodeStatusLabels: Record<string, string> = {
+  pending: '排队中',
+  running: '运行中',
+  succeeded: '成功',
+  failed: '失败',
+  canceled: '已取消',
+  skipped: '已跳过',
+};
+
+function workflowRunStatusLabel(status: string) {
+  return workflowRunStatusLabels[status] || status;
+}
+
+function workflowNodeStatusLabel(status: string) {
+  return workflowNodeStatusLabels[status] || status;
+}
+
+function stopDebugPolling() {
+  if (debugPollTimer) {
+    clearInterval(debugPollTimer);
+    debugPollTimer = null;
+  }
+}
+
+async function refreshDebugRun() {
+  if (!props.agentId || !debugRun.value?.id) return;
+  try {
+    const result = await getWorkflowRun(props.agentId, debugRun.value.id);
+    debugRun.value = result?.data || debugRun.value;
+    if (debugRunTerminal.value) stopDebugPolling();
+  } catch (error: any) {
+    validationStatus.value = 'error';
+    validationMessage.value = error?.message || '读取试跑状态失败';
+  }
+}
+
+function startDebugPolling() {
+  stopDebugPolling();
+  debugPollTimer = setInterval(() => {
+    void refreshDebugRun();
+  }, 1000);
+}
+
+/** 打开试跑抽屉；父组件的“保存并试用”也复用这个入口。 */
+function openDebugRun() {
+  if (!props.agentId) {
+    MessagePlugin.warning('请先保存工作流，再使用编辑器内试跑');
+    return;
+  }
+  debugDrawerOpen.value = true;
+}
+
+function closeDebugRun() {
+  if (debugRun.value && !debugRunTerminal.value) {
+    MessagePlugin.warning('当前试跑仍在运行，请先停止后再关闭面板');
+    return;
+  }
+  debugDrawerOpen.value = false;
+  stopDebugPolling();
+}
+
+async function startDebugRun() {
+  if (!props.agentId || debugLoading.value || !debugQuery.value.trim()) return;
+  if (!validateDefinition()) return;
+  debugLoading.value = true;
+  try {
+    let expectedRevision = props.draftRevision;
+    if (props.saveDraft) {
+      const savedRevision = await props.saveDraft();
+      if (savedRevision === null) return;
+      expectedRevision = savedRevision;
+    }
+    const result = await startWorkflowDebugRun(
+      props.agentId,
+      expectedRevision,
+      { query: debugQuery.value.trim(), attachments_text: debugAttachmentsText.value.trim() },
+      `debug:${props.agentId}:${expectedRevision}:${Date.now()}`,
+    );
+    debugRun.value = result?.data || null;
+    debugDrawerOpen.value = true;
+    if (debugRun.value && !debugRunTerminal.value) startDebugPolling();
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '试跑启动失败');
+  } finally {
+    debugLoading.value = false;
+  }
+}
+
+async function cancelDebugRun() {
+  if (!props.agentId || !debugRun.value?.id || debugLoading.value) return;
+  debugLoading.value = true;
+  try {
+    const result = await cancelWorkflowRun(props.agentId, debugRun.value.id);
+    if (result?.data?.run) debugRun.value = result.data.run;
+    await refreshDebugRun();
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '停止试跑失败');
+  } finally {
+    debugLoading.value = false;
+  }
+}
+
+async function retryDebugRun() {
+  if (!props.agentId || !debugRun.value?.id || debugLoading.value) return;
+  debugLoading.value = true;
+  try {
+    const result = await retryWorkflowRun(props.agentId, debugRun.value.id);
+    debugRun.value = result?.data || null;
+    if (debugRun.value && !debugRunTerminal.value) startDebugPolling();
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '整次重跑失败');
+  } finally {
+    debugLoading.value = false;
+  }
+}
+
+async function retryDebugNode(nodeRunId: number) {
+  if (!props.agentId || !debugRun.value?.id || debugLoading.value) return;
+  debugLoading.value = true;
+  try {
+    const result = await retryWorkflowNode(props.agentId, debugRun.value.id, nodeRunId);
+    debugRun.value = result?.data || null;
+    if (debugRun.value && !debugRunTerminal.value) startDebugPolling();
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '节点重试失败');
+  } finally {
+    debugLoading.value = false;
+  }
+}
+
 const workflowFileInputRef = ref<HTMLInputElement | null>(null);
 
 /**
@@ -3294,7 +3833,24 @@ async function onWorkflowFileSelected(event: Event) {
       return;
     }
 
-    const newWorkflow = result.data.workflow;
+    if (!props.agentId) {
+      MessagePlugin.warning('请先保存工作流，再导入并进行服务端资源预检');
+      return;
+    }
+    const document = JSON.parse(fileText);
+    const previewResult = await previewWorkflowImport(props.agentId, document);
+    const preview = previewResult?.data;
+    const newWorkflow = preview?.definition || result.data.workflow;
+    if (!newWorkflow) {
+      MessagePlugin.error('服务端没有返回可替换的工作流定义');
+      return;
+    }
+
+    const notices = [
+      ...(preview?.issues || []).map((issue) => `结构问题：${issue.message}`),
+      ...(preview?.missing_resources || []).map((resource) => `缺失资源：${resource}`),
+      ...(preview?.sensitive_fields || []).map((field) => `已脱敏：${field}`),
+    ];
 
     const doApplyImport = () => {
       // 记录撤回快照，确保用户可以 Ctrl+Z 一键撤回
@@ -3308,11 +3864,11 @@ async function onWorkflowFileSelected(event: Event) {
       MessagePlugin.success('工作流导入成功');
     };
 
-    // 如果当前画布已经有节点（且不是全新空白模板），弹出二次确认
-    if (flowNodes.value.length > 0 && !isUntouchedDefinition(toDefinition())) {
+    // 预检结果或当前画布有内容时都要明确确认，避免用户误替换或误以为资源已自动补齐。
+    if (notices.length > 0 || (flowNodes.value.length > 0 && !isUntouchedDefinition(toDefinition()))) {
       const confirmDialog = DialogPlugin.confirm({
         header: '确认导入工作流',
-        body: '导入新流程将替换当前画布的所有节点与连线，是否继续？',
+        body: `${notices.length ? `${notices.join('\n')}\n\n` : ''}导入新流程将替换当前画布的所有节点与连线，是否继续？`,
         confirmBtn: { content: '确认导入', theme: 'primary' },
         cancelBtn: { content: '取消' },
         onConfirm: () => {
@@ -3338,6 +3894,7 @@ async function onWorkflowFileSelected(event: Event) {
 // 暴露给父组件的能力
 defineExpose({
   validate: validateDefinition,
+  validateDraftSyntax: () => pendingJSONErrors().length === 0,
   isUntouched: () => isUntouchedFlow.value,
   isTemplateGalleryOpen: () => showTemplateGallery.value,
   loadWorkflowDefinition: (def: WorkflowDefinition) => {
@@ -3347,6 +3904,9 @@ defineExpose({
     });
   },
   toDefinition,
+  publish: publishDefinition,
+  openDebugRun,
+  clearRevisionConflict: () => { revisionConflict.value = null; },
 });
 </script>
 
@@ -3401,6 +3961,290 @@ defineExpose({
   color: var(--td-brand-color);
   font-size: 12px;
   font-weight: 500;
+}
+
+/* 修订与发布状态徽标：让用户一眼看到"库里是什么版本、画布改没改" */
+.workflow-revision-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-unpublished-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--td-success-color) 12%, transparent);
+  color: var(--td-success-color);
+
+  &.is-dirty {
+    background: color-mix(in srgb, var(--td-warning-color) 14%, transparent);
+    color: var(--td-warning-color);
+  }
+}
+
+/* 修订冲突横幅：强调"刷新而非覆盖"的操作导向 */
+.workflow-revision-conflict {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 48px 0 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--td-error-color) 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--td-error-color) 8%, transparent);
+  color: var(--td-error-color);
+  font-size: 13px;
+}
+
+.workflow-revision-conflict-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+
+  strong {
+    font-weight: 600;
+  }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+}
+
+/* 发布前结构化校验问题列表 */
+.workflow-publish-issues {
+  margin: 10px 48px 0 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--td-warning-color) 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--td-warning-color) 8%, transparent);
+
+  ul {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+.workflow-publish-issues-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.workflow-publish-issue {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  color: var(--td-text-color-primary);
+  cursor: pointer;
+
+  &:hover {
+    background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
+  }
+
+  em {
+    font-style: normal;
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+  }
+}
+
+.workflow-publish-issue-code {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--td-brand-color);
+}
+
+.workflow-debug-drawer {
+  position: relative;
+  margin: 12px 48px 0 0;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
+  overflow: hidden;
+}
+
+.workflow-debug-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--td-component-stroke);
+
+  div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  strong {
+    font-size: 14px;
+  }
+
+  small {
+    color: var(--td-text-color-secondary);
+    font-size: 12px;
+  }
+}
+
+.workflow-debug-drawer__body {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(280px, 1.2fr);
+  gap: 12px;
+  padding: 14px;
+}
+
+.workflow-debug-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+
+  span {
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+  }
+
+  textarea {
+    width: 100%;
+    min-height: 78px;
+    resize: vertical;
+    padding: 8px 10px;
+    border: 1px solid var(--td-component-stroke);
+    border-radius: 6px;
+    background: var(--td-bg-color-page);
+    color: var(--td-text-color-primary);
+    font: inherit;
+    line-height: 1.5;
+  }
+}
+
+.workflow-debug-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-debug-run-summary {
+  grid-column: 1 / -1;
+  padding-top: 12px;
+  border-top: 1px solid var(--td-component-stroke);
+}
+
+.workflow-debug-run-summary__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+
+  strong {
+    color: var(--td-text-color-primary);
+
+    &.is-succeeded { color: var(--td-success-color); }
+    &.is-partial { color: var(--td-warning-color); }
+    &.is-failed, &.is-canceled { color: var(--td-error-color); }
+  }
+}
+
+.workflow-debug-error {
+  margin: 8px 0 0;
+  color: var(--td-error-color);
+  font-size: 12px;
+}
+
+.workflow-debug-nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.workflow-debug-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+  background: var(--td-bg-color-page);
+}
+
+.workflow-debug-node__status {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--td-text-color-placeholder);
+
+  &.is-running { background: var(--td-brand-color); }
+  &.is-succeeded { background: var(--td-success-color); }
+  &.is-failed, &.is-canceled { background: var(--td-error-color); }
+  &.is-pending { background: var(--td-warning-color); }
+}
+
+.workflow-debug-node__main {
+  flex: 1;
+  min-width: 0;
+
+  strong, small, p {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong { font-size: 13px; }
+  small { margin-top: 2px; color: var(--td-text-color-secondary); font-size: 11px; }
+  p { margin: 5px 0 0; color: var(--td-text-color-secondary); font-size: 11px; }
+}
+
+.workflow-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+
+  &:hover { border-color: var(--td-component-stroke); color: var(--td-text-color-primary); }
 }
 
 .workflow-subtitle {
@@ -4179,6 +5023,52 @@ defineExpose({
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
     color: var(--td-brand-color);
+  }
+}
+
+/* 分支模式选择：两张可点卡片，用边框与底色区分当前生效的策略 */
+.workflow-branch-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-branch-mode-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+
+  strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+  }
+
+  small {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--td-text-color-secondary);
+  }
+
+  &:hover:not(:disabled) {
+    border-color: var(--td-brand-color);
+  }
+
+  &.is-active {
+    border-color: var(--td-brand-color);
+    background: color-mix(in srgb, var(--td-brand-color) 8%, transparent);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 }
 

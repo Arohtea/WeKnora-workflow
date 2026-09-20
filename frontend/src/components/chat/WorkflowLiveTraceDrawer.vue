@@ -16,23 +16,11 @@
         <div class="workflow-trace-header-left">
           <div class="workflow-trace-badge" :class="{ 'is-running': Boolean(activeNodeId) }">
             <span class="workflow-trace-badge-dot" />
-            <span class="workflow-trace-badge-text">
-              {{ activeNodeId ? '正在执行' : (completedNodeIds.length > 0 ? '执行完成' : '就绪') }}
-            </span>
+            <span class="workflow-trace-badge-text">{{ statusLabel }}</span>
           </div>
           <h3 class="workflow-trace-title">{{ title || '工作流执行轨迹' }}</h3>
         </div>
         <div class="workflow-trace-header-actions">
-          <button
-            type="button"
-            class="workflow-trace-icon-btn"
-            title="自适应视野"
-            @click="fitView"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
-            </svg>
-          </button>
           <button
             type="button"
             class="workflow-trace-icon-btn"
@@ -63,95 +51,81 @@
         </div>
       </div>
 
-      <!-- 画布容器 -->
-      <div class="workflow-trace-canvas">
-        <VueFlow
-          v-if="flowNodes.length > 0"
-          :nodes="flowNodes"
-          :edges="flowEdges"
-          :nodes-draggable="false"
-          :nodes-connectable="false"
-          :zoom-on-scroll="true"
-          :pan-on-drag="true"
-          :prevent-scrolling="false"
-          :fit-view-on-init="true"
-          class="workflow-trace-vueflow"
-        >
-          <template #node-default="{ id, data }">
-            <div
-              class="trace-node-card"
-              :class="[
-                `trace-node-card--${data.workflowType}`,
-                `is-${getNodeState(id)}`
-              ]"
-            >
-              <Handle id="top" type="target" :position="Position.Top" :connectable="false" class="trace-node-handle" />
-              <Handle id="right" type="source" :position="Position.Right" :connectable="false" class="trace-node-handle" />
-              <Handle id="bottom" type="source" :position="Position.Bottom" :connectable="false" class="trace-node-handle" />
-              <Handle id="left" type="target" :position="Position.Left" :connectable="false" class="trace-node-handle" />
+      <!-- 纵向步骤时间线 -->
+      <div ref="timelineEl" class="workflow-trace-canvas">
+        <ol v-if="steps.length > 0" class="trace-timeline">
+          <li
+            v-for="(step, index) in steps"
+            :key="step.id"
+            class="trace-step"
+            :class="[`is-${step.state}`, `trace-step--${step.type || 'unknown'}`]"
+          >
+            <!-- 状态节点：时间线的圆点 -->
+            <span class="trace-step-dot" aria-hidden="true">
+              <svg
+                v-if="step.state === 'running'"
+                class="trace-spin"
+                viewBox="0 0 24 24"
+                width="12"
+                height="12"
+                fill="none"
+              >
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="32" stroke-linecap="round" />
+              </svg>
+              <svg v-else-if="step.state === 'success'" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <svg v-else-if="step.state === 'failed'" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              <span v-else class="trace-step-index">{{ index + 1 }}</span>
+            </span>
 
-              <div class="trace-node-stripe" />
-              <div class="trace-node-body">
-                <div class="trace-node-icon-wrap">
-                  <svg v-if="data.workflowType === 'start'" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="5 3 19 12 5 21 5 3" />
-                  </svg>
-                  <svg v-else-if="data.workflowType === 'end'" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="9 12 11 14 15 10" />
-                  </svg>
-                  <svg v-else-if="data.workflowType === 'llm'" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
-                  </svg>
-                  <svg v-else-if="data.workflowType === 'llm-decision'" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="18" cy="18" r="3" />
-                    <circle cx="6" cy="6" r="3" />
-                    <path d="M18 6h-5a3 3 0 0 0-3 3v6" />
-                    <line x1="6" y1="9" x2="6" y2="21" />
-                  </svg>
-                  <svg v-else-if="data.workflowType === 'knowledge-retrieval'" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
-                    <line x1="8" y1="7" x2="16" y2="7" />
-                    <line x1="8" y1="11" x2="14" y2="11" />
-                  </svg>
-                  <svg v-else-if="data.workflowType === 'http-request'" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="2" y1="12" x2="22" y2="12" />
-                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                  </svg>
-                  <svg v-else viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                  </svg>
-                </div>
-                <div class="trace-node-info">
-                  <span class="trace-node-name" :title="data.name">{{ data.name }}</span>
-                  <span class="trace-node-type">{{ nodeTypeLabel(data.workflowType) }}</span>
-                </div>
-                <div class="trace-node-status">
-                  <span v-if="getNodeState(id) === 'running'" class="trace-status-spinner">
-                    <svg class="trace-spin" viewBox="0 0 24 24" width="14" height="14" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="32" stroke-linecap="round" />
-                    </svg>
-                  </span>
-                  <span v-else-if="getNodeState(id) === 'success'" class="trace-status-success">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  </span>
-                  <span v-else-if="getNodeState(id) === 'failed'" class="trace-status-failed">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </span>
-                  <span v-else class="trace-status-idle" />
-                </div>
+            <!-- 步骤卡片 -->
+            <div class="trace-step-card">
+              <div class="trace-step-icon-wrap">
+                <svg v-if="step.type === 'start'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                <svg v-else-if="step.type === 'end'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="9 12 11 14 15 10" />
+                </svg>
+                <svg v-else-if="step.type === 'llm'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
+                </svg>
+                <svg v-else-if="step.type === 'llm-decision'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="18" cy="18" r="3" />
+                  <circle cx="6" cy="6" r="3" />
+                  <path d="M18 6h-5a3 3 0 0 0-3 3v6" />
+                  <line x1="6" y1="9" x2="6" y2="21" />
+                </svg>
+                <svg v-else-if="step.type === 'knowledge-retrieval'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
+                  <line x1="8" y1="7" x2="16" y2="7" />
+                  <line x1="8" y1="11" x2="14" y2="11" />
+                </svg>
+                <svg v-else-if="step.type === 'http-request'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                </svg>
               </div>
+
+              <div class="trace-step-info">
+                <span class="trace-step-name" :title="step.name">{{ step.name }}</span>
+                <span class="trace-step-type">{{ nodeTypeLabel(step.type) }}</span>
+              </div>
+
+              <span v-if="step.state === 'running'" class="trace-step-tag">执行中</span>
+              <span v-else-if="step.state === 'failed'" class="trace-step-tag is-failed">失败</span>
             </div>
-          </template>
-          <Background pattern-color="#e2e8f0" :gap="16" />
-          <Controls position="bottom-left" :show-interactive="false" />
-        </VueFlow>
+          </li>
+        </ol>
         <div v-else class="workflow-trace-empty">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -162,33 +136,22 @@
           <span>正在加载工作流结构...</span>
         </div>
       </div>
-
-      <!-- 底部当前节点动态卡片 -->
-      <div v-if="activeNodeDetails || completedNodeIds.length > 0" class="workflow-trace-footer">
-        <div class="workflow-trace-status-card">
-          <div class="trace-status-header">
-            <span class="trace-status-indicator" :class="{ 'is-running': Boolean(activeNodeId) }" />
-            <strong>{{ activeNodeDetails ? `当前：${activeNodeDetails.name}` : '工作流运行完成' }}</strong>
-          </div>
-          <p class="trace-status-desc">
-            {{ activeNodeDetails ? `${nodeTypeLabel(activeNodeDetails.type)} 正在处理任务...` : '所有节点已顺序执行完成，回答已呈现。' }}
-          </p>
-        </div>
-      </div>
     </aside>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { VueFlow, useVueFlow, Handle, Position } from '@vue-flow/core';
-import { Background } from '@vue-flow/background';
-import { Controls } from '@vue-flow/controls';
-import type { Node, Edge } from '@vue-flow/core';
-import type { WorkflowDefinition, WorkflowNodeType } from '@/api/agent';
-import '@vue-flow/core/dist/style.css';
-import '@vue-flow/core/dist/theme-default.css';
-import '@vue-flow/controls/dist/style.css';
+import type { WorkflowDefinition, WorkflowNode, WorkflowNodeType } from '@/api/agent';
+
+type StepState = 'running' | 'success' | 'failed' | 'idle';
+
+interface TraceStep {
+  id: string;
+  name: string;
+  type?: WorkflowNodeType;
+  state: StepState;
+}
 
 const props = withDefaults(
   defineProps<{
@@ -213,37 +176,58 @@ const emit = defineEmits<{
   (e: 'update:visible', val: boolean): void;
 }>();
 
-const { fitView: vueFlowFitView, setCenter } = useVueFlow();
+const timelineEl = ref<HTMLElement | null>(null);
 
 const handleClose = () => {
   emit('update:visible', false);
 };
 
-const fitView = () => {
-  nextTick(() => {
-    vueFlowFitView({ padding: 0.25, duration: 400 });
-  });
-};
+const nodeById = computed(() => {
+  const map = new Map<string, WorkflowNode>();
+  props.definition?.nodes?.forEach((node) => map.set(node.id, node));
+  return map;
+});
 
-const getNodeState = (nodeId: string): 'running' | 'success' | 'failed' | 'idle' => {
-  if (props.activeNodeId === nodeId) return 'running';
-  if (props.failedNodeIds.includes(nodeId)) return 'failed';
-  if (props.completedNodeIds.includes(nodeId)) return 'success';
-  return 'idle';
-};
+/**
+ * 将"执行轨迹 + 工作流定义"归一为一条纵向步骤序列。
+ * 已执行节点按事件到达顺序（即真实执行顺序）在前，未执行节点按画布纵向位置补齐，
+ * 这样时间线既反映实际推进路径，又保留剩余步骤的推进感。
+ */
+const steps = computed<TraceStep[]>(() => {
+  const seen = new Set<string>();
+  const list: TraceStep[] = [];
 
-const nodeTypeIcon = (type?: WorkflowNodeType): string => {
-  switch (type) {
-    case 'start': return 'play-circle';
-    case 'end': return 'check-circle';
-    case 'llm': return 'chat';
-    case 'llm-decision': return 'fork';
-    case 'knowledge-retrieval': return 'data-search';
-    case 'http-request': return 'internet';
-    case 'tool': return 'tools';
-    default: return 'flow';
-  }
-};
+  const push = (id: string | null | undefined, state: StepState) => {
+    if (!id) return;
+    const existing = list.find((step) => step.id === id);
+    // 循环工作流里同一节点会二次执行，此处保留原位置、只刷新状态，
+    // 否则它会被去重成"已完成"，和实际正在运行的状态相矛盾。
+    if (existing) {
+      existing.state = state;
+      return;
+    }
+    seen.add(id);
+    const node = nodeById.value.get(id);
+    list.push({ id, name: node?.name || id, type: node?.type, state });
+  };
+
+  props.completedNodeIds.forEach((id) => push(id, 'success'));
+  props.failedNodeIds.forEach((id) => push(id, 'failed'));
+  push(props.activeNodeId, 'running');
+
+  const pending = (props.definition?.nodes || [])
+    .filter((node) => !seen.has(node.id))
+    .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+  pending.forEach((node) => push(node.id, 'idle'));
+
+  return list;
+});
+
+const statusLabel = computed(() => {
+  if (props.activeNodeId) return '正在执行';
+  if (props.completedNodeIds.length > 0) return '执行完成';
+  return '就绪';
+});
 
 const nodeTypeLabel = (type?: WorkflowNodeType): string => {
   switch (type) {
@@ -258,78 +242,24 @@ const nodeTypeLabel = (type?: WorkflowNodeType): string => {
   }
 };
 
-const flowNodes = computed<Node[]>(() => {
-  if (!props.definition?.nodes) return [];
-  return props.definition.nodes.map(node => ({
-    id: node.id,
-    type: 'default',
-    position: { x: node.position.x, y: node.position.y },
-    data: {
-      name: node.name,
-      workflowType: node.type,
-      config: node.config,
-    },
-  }));
-});
+const totalNodesCount = computed(() => steps.value.length);
 
-const flowEdges = computed<Edge[]>(() => {
-  if (!props.definition?.edges) return [];
-  return props.definition.edges.map(edge => {
-    const isSourceDone = props.completedNodeIds.includes(edge.source);
-    const isTargetActive = props.activeNodeId === edge.target || props.completedNodeIds.includes(edge.target);
-    const isLive = isSourceDone && isTargetActive;
-    return {
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.source_handle || undefined,
-      targetHandle: edge.target_handle || undefined,
-      animated: isLive,
-      style: {
-        stroke: isLive ? '#0052d9' : (isSourceDone ? '#10b981' : '#cbd5e1'),
-        strokeWidth: isLive ? 2.5 : 1.5,
-      },
-    };
-  });
-});
+const completedCount = computed(
+  () => steps.value.filter((step) => step.state === 'success' || step.state === 'failed').length
+);
 
-const totalNodesCount = computed(() => props.definition?.nodes?.length || 0);
-const completedCount = computed(() => {
-  if (!props.definition?.nodes) return 0;
-  return props.completedNodeIds.length;
-});
 const progressPercent = computed(() => {
   if (totalNodesCount.value === 0) return 0;
   return Math.min(100, Math.round((completedCount.value / totalNodesCount.value) * 100));
 });
 
-const activeNodeDetails = computed(() => {
-  if (!props.activeNodeId || !props.definition?.nodes) return null;
-  return props.definition.nodes.find(n => n.id === props.activeNodeId) || null;
-});
-
-// 监听活跃节点变动，平滑聚焦
+// 时间线随执行推进，自动把当前节点滚入视野
 watch(
   () => props.activeNodeId,
-  (newId) => {
-    if (newId && props.visible && props.definition?.nodes) {
-      const target = props.definition.nodes.find(n => n.id === newId);
-      if (target) {
-        nextTick(() => {
-          setCenter(target.position.x + 90, target.position.y + 35, { duration: 600, zoom: 0.95 });
-        });
-      }
-    }
-  }
-);
-
-// 展开时自适应
-watch(
-  () => props.visible,
-  (isOpen) => {
-    if (isOpen) {
-      fitView();
-    }
+  async (id) => {
+    if (!id || !props.visible) return;
+    await nextTick();
+    timelineEl.value?.querySelector('.is-running')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 );
 </script>
@@ -392,6 +322,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .workflow-trace-badge {
@@ -432,12 +363,16 @@ watch(
   color: #0f172a;
   margin: 0;
   letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflow-trace-header-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .workflow-trace-icon-btn {
@@ -489,13 +424,8 @@ watch(
 
 .workflow-trace-canvas {
   flex: 1;
-  position: relative;
-  background: #fdfdfd;
-}
-
-.workflow-trace-vueflow {
-  width: 100%;
-  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .workflow-trace-empty {
@@ -509,48 +439,137 @@ watch(
   font-size: 13px;
 }
 
-/* 节点卡片定制 */
-.trace-node-card {
+/* ===== 纵向步骤时间线 ===== */
+.trace-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 16px 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trace-step {
   position: relative;
-  width: 180px;
-  border-radius: 8px;
+  padding-left: 32px;
+  /* 节点类型主色，卡片左侧色条与图标统一取色 */
+  --trace-accent: #94a3b8;
+}
+
+.trace-step--start { --trace-accent: #059669; }
+.trace-step--end { --trace-accent: #0d9488; }
+.trace-step--llm { --trace-accent: #0052d9; }
+.trace-step--llm-decision { --trace-accent: #7c3aed; }
+.trace-step--knowledge-retrieval { --trace-accent: #0284c7; }
+.trace-step--http-request { --trace-accent: #e11d48; }
+.trace-step--tool { --trace-accent: #d97706; }
+
+/* 连接相邻步骤的竖线 */
+.trace-step::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 30px;
+  height: calc(100% - 20px);
+  width: 2px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  transition: background 0.25s ease;
+}
+
+.trace-step:last-child::before {
+  display: none;
+}
+
+.trace-step.is-success::before {
+  background: rgba(16, 185, 129, 0.45);
+}
+
+.trace-step.is-failed::before {
+  background: rgba(239, 68, 68, 0.45);
+}
+
+.trace-step-dot {
+  position: absolute;
+  left: 0;
+  top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
   background: #ffffff;
-  border: 1px solid #cbd5e1;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+  border: 2px solid #e2e8f0;
+  color: #94a3b8;
+  z-index: 1;
   transition: all 0.25s ease;
 }
 
-.trace-node-handle {
-  width: 4px;
-  height: 4px;
-  opacity: 0;
-  pointer-events: none;
-  border: none;
-  background: transparent;
+.trace-step-index {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-.trace-node-stripe {
-  height: 3px;
-  border-radius: 8px 8px 0 0;
-  background: #94a3b8;
+.trace-step.is-success .trace-step-dot {
+  border-color: #10b981;
+  color: #10b981;
 }
 
-.trace-node-card--start .trace-node-stripe { background: #059669; }
-.trace-node-card--llm .trace-node-stripe { background: #0052d9; }
-.trace-node-card--knowledge-retrieval .trace-node-stripe { background: #0284c7; }
-.trace-node-card--llm-decision .trace-node-stripe { background: #7c3aed; }
-.trace-node-card--http-request .trace-node-stripe { background: #e11d48; }
-.trace-node-card--tool .trace-node-stripe { background: #d97706; }
-.trace-node-card--end .trace-node-stripe { background: #0d9488; }
+.trace-step.is-failed .trace-step-dot {
+  border-color: #ef4444;
+  color: #ef4444;
+}
 
-.trace-node-body {
+.trace-step.is-running .trace-step-dot {
+  border-color: #0052d9;
+  color: #0052d9;
+  box-shadow: 0 0 0 3px rgba(0, 82, 217, 0.15);
+}
+
+.trace-step-card {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid var(--trace-accent);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  transition: all 0.25s ease;
 }
 
-.trace-node-icon-wrap {
+.trace-step.is-idle .trace-step-card {
+  background: #fbfcfd;
+  box-shadow: none;
+}
+
+.trace-step.is-idle .trace-step-name {
+  color: #64748b;
+}
+
+.trace-step.is-running .trace-step-card {
+  animation: stepCardGlow 1.8s infinite alternate;
+}
+
+@keyframes stepCardGlow {
+  from { box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.2), 0 4px 12px rgba(0, 82, 217, 0.1); }
+  to { box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.4), 0 8px 24px rgba(0, 82, 217, 0.25); }
+}
+
+.trace-step.is-success .trace-step-card {
+  background: #fcfdfc;
+}
+
+.trace-step.is-failed .trace-step-card {
+  background: #fffafa;
+  border-color: #fecaca;
+  border-left-color: #ef4444;
+}
+
+.trace-step-icon-wrap {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -558,19 +577,22 @@ watch(
   height: 26px;
   border-radius: 6px;
   background: #f1f5f9;
-  color: #475569;
-  font-size: 13px;
+  color: var(--trace-accent);
   flex-shrink: 0;
 }
 
-.trace-node-info {
+.trace-step.is-idle .trace-step-icon-wrap {
+  color: #94a3b8;
+}
+
+.trace-step-info {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-.trace-node-name {
+.trace-step-name {
   font-size: 12px;
   font-weight: 600;
   color: #1e293b;
@@ -579,108 +601,32 @@ watch(
   white-space: nowrap;
 }
 
-.trace-node-type {
+.trace-step-type {
   font-size: 10px;
   color: #94a3b8;
 }
 
-/* 节点状态样式 */
-.trace-node-card.is-running {
-  border-color: #0052d9;
-  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.25), 0 8px 20px rgba(0, 82, 217, 0.15);
-  animation: nodeCardGlow 1.8s infinite alternate;
-}
-
-@keyframes nodeCardGlow {
-  from { box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.2), 0 4px 12px rgba(0, 82, 217, 0.1); }
-  to { box-shadow: 0 0 0 4px rgba(0, 82, 217, 0.4), 0 8px 24px rgba(0, 82, 217, 0.25); }
-}
-
-.trace-node-card.is-success {
-  border-color: #10b981;
-  background: #fcfdfc;
-}
-
-.trace-node-card.is-failed {
-  border-color: #ef4444;
-  background: #fffafa;
-}
-
-.trace-node-card.is-idle {
-  opacity: 0.82;
-}
-
-.trace-node-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
+.trace-step-tag {
   flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #0052d9;
+  background: rgba(0, 82, 217, 0.1);
+}
+
+.trace-step-tag.is-failed {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .trace-spin {
   animation: spin 1s linear infinite;
-  color: #0052d9;
 }
 
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-.trace-status-success {
-  color: #10b981;
-}
-
-.trace-status-failed {
-  color: #ef4444;
-}
-
-.trace-status-idle {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #cbd5e1;
-}
-
-.workflow-trace-footer {
-  padding: 14px 18px;
-  border-top: 1px solid #f1f5f9;
-  background: #ffffff;
-}
-
-.workflow-trace-status-card {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-}
-
-.trace-status-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #0f172a;
-}
-
-.trace-status-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #10b981;
-}
-
-.trace-status-indicator.is-running {
-  background: #0052d9;
-  box-shadow: 0 0 0 3px rgba(0, 82, 217, 0.25);
-  animation: tracePulse 1.6s infinite;
-}
-
-.trace-status-desc {
-  margin: 4px 0 0 16px;
-  font-size: 12px;
-  color: #64748b;
 }
 </style>

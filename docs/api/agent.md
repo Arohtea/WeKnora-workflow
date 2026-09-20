@@ -36,6 +36,20 @@
 | DELETE | `/agents/:id`              | 删除智能体                 |
 | POST   | `/agents/:id/copy`         | 复制智能体                 |
 | GET    | `/agents/placeholders`     | 获取占位符定义             |
+| GET    | `/agents/:id/workflow/catalog`  | 获取工作流资源目录       |
+| POST   | `/agents/:id/workflow/validate` | 校验工作流草稿（结构化问题） |
+| POST   | `/agents/:id/workflow/publish`  | 发布工作流新版本         |
+| GET    | `/agents/:id/workflow/versions` | 获取工作流发布历史       |
+| GET    | `/agents/:id/workflow/versions/:version` | 获取指定发布版本 |
+| POST   | `/agents/:id/workflow/versions/:version/restore` | 恢复版本为新草稿 |
+| POST   | `/agents/:id/workflow/import/preview` | 预检工作流导入 |
+| POST   | `/agents/:id/workflow/debug-runs` | 编辑器内试跑当前草稿 |
+| GET    | `/agents/:id/workflow/runs`     | 获取工作流运行记录列表   |
+| GET    | `/agents/:id/workflow/runs/:run_id` | 获取工作流运行详情   |
+| GET    | `/agents/:id/workflow/runs/:run_id/stream` | 续接运行生命周期事件 |
+| POST   | `/agents/:id/workflow/runs/:run_id/cancel` | 取消工作流运行 |
+| POST   | `/agents/:id/workflow/runs/:run_id/retry` | 使用原快照整次重跑 |
+| POST   | `/agents/:id/workflow/runs/:run_id/nodes/:node_run_id/retry` | 从失败节点继续 |
 
 ---
 
@@ -546,7 +560,200 @@ curl --location 'http://localhost:8080/api/v1/agent-chat/session-123' \
 }'
 ```
 
+## 工作流（Workflow）接口
+
+工作流智能体（`agent_type: workflow`）的编排能力。版本模型、分支语义、状态归并和运行记录的设计说明见 [工作流生产可用 V1](../workflow-production-v1.md)。
+
+### 权限
+
+| 操作 | 权限 |
+| --- | --- |
+| 读取目录 / 发布历史 / 运行记录 / 脱敏事件 | Viewer 及以上 |
+| 校验草稿 | Viewer 及以上（纯校验，不落库） |
+| 保存、试跑、发布、恢复版本、取消、重试 | 智能体创建者或 Admin 及以上 |
+| 查看完整节点输入/输出载荷 | 智能体创建者或 Admin 及以上；默认只返回脱敏摘要 |
+
+### GET `/agents/:id/workflow/catalog`
+
+返回该智能体有权使用的内置工具、MCP 工具和已安装 Skill，供编辑器资源选择。编辑器不再依赖前端硬编码目录。
+
+```json
+{"success": true, "data": {"builtin_tools": [...], "mcp_services": [...], "skills": [...]}}
+```
+
+### POST `/agents/:id/workflow/validate`
+
+对**未保存的草稿**做结构化校验，返回可定位到编辑器的错误码、节点 ID、连线 ID 与字段路径。不落库、不影响草稿。
+
+**请求体**
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `config` | object | 否 | 待校验的智能体配置；缺省时按"非工作流"返回 `NOT_WORKFLOW` |
+
+**响应**：`data` 为问题数组，无问题是空数组。
+
+```json
+{"success": true, "data": [
+  {"code": "NO_MATCHING_BRANCH", "message": "...", "node_id": "n1", "edge_id": "e2", "field_path": "nodes.1.config"}
+]}
+```
+
+### POST `/agents/:id/workflow/publish`
+
+校验当前草稿并创建**不可变**发布版本。校验失败返回 `400`；草稿修订号不匹配返回 `409`。
+
+**请求体**
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `expected_revision` | integer | 是 | 客户端读取草稿时看到的 `draft_revision`（从 1 起，传 0 会被拒绝） |
+
+**成功 200**
+
+```json
+{"success": true, "data": {
+  "tenant_id": 1, "agent_id": "...", "version": 3, "draft_revision": 12,
+  "definition": {"schema_version": 2, "nodes": [], "edges": [], "viewport": {}},
+  "config_snapshot": {}, "published_by": "...", "published_at": "2026-01-01T00:00:00Z"
+}}
+```
+
+### GET `/agents/:id/workflow/versions/:version`
+
+获取指定不可变发布版本。版本内容只读，响应中的 `definition` 与 `config_snapshot` 是该版本的完整快照；它们不随当前草稿变化。
+
+### POST `/agents/:id/workflow/versions/:version/restore`
+
+把指定版本复制成新的草稿修订，不会修改旧版本，也不会自动发布。
+
+```json
+{"expected_revision": 12}
+```
+
+返回值为更新后的智能体草稿。`expected_revision` 不匹配时返回 `409`；恢复后必须再次通过严格校验并调用发布接口。
+
+### POST `/agents/:id/workflow/import/preview`
+
+服务端预检导入内容，不修改草稿。服务端会迁移 schema、脱敏敏感字段、检查资源引用，并返回 `issues`、`warnings`、`missing_resources`、`sensitive_fields` 和 `resource_mappings`。
+
+```json
+{"document": {"schema_version": 2, "nodes": [], "edges": [], "viewport": {}}}
+```
+
+预检通过后，前端才可由用户确认替换画布；导入结果仍是未发布草稿，定义中不携带凭据值。
+
+### POST `/agents/:id/workflow/debug-runs`
+
+基于指定 `expected_revision` 的当前草稿快照创建编辑器内 Debug Run。Debug Run 需要严格校验工作流，但不会推进 `published_version`，也不会改变正式聊天入口的执行版本。
+
+**请求体**
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `expected_revision` | integer | 是 | 当前编辑器看到的草稿修订号 |
+| `input.query` | string | 否 | 试跑问题 |
+| `input.attachments_text` | string | 否 | 已提取的附件文本 |
+| `idempotency_key` | string | 否 | 幂等键，也可使用 `Idempotency-Key` 请求头 |
+
+返回 `202` 和 `WorkflowRun`。重复幂等请求返回数据库中已有的同一 `run_id`，不会重复执行。
+
+### GET `/agents/:id/workflow/runs/:run_id/stream`
+
+以 SSE 续接持久化生命周期事件。可用 `after_sequence` 查询参数或 `Last-Event-ID` 请求头指定已收到的 sequence；服务端只返回更大的 sequence，并以 `id` 字段复用该 sequence。
+
+```text
+GET /agents/a/workflow/runs/r1/stream?after_sequence=7
+
+id: 8
+event: workflow_node.completed
+data: {"sequence":8,"run_id":"r1","status":"succeeded"}
+```
+
+客户端应按 `run_id + sequence` 去重，断线后用最后一个 sequence 续接。运行进入终态且没有更多事件时，服务端发送 `event: end` 后关闭连接。
+
+### POST `/agents/:id/workflow/runs/:run_id/cancel`
+
+幂等请求取消运行。服务端先写入数据库 `cancel_requested_at`，再尽力删除排队唤醒任务；活动节点通过执行上下文响应取消，最终由状态机写入 `canceled`。
+
+### POST `/agents/:id/workflow/runs/:run_id/retry`
+
+使用原运行的定义快照、配置快照和输入创建新的运行。草稿或后续发布不会改变这次重跑使用的内容；返回 `202` 和新的 `WorkflowRun`。
+
+### POST `/agents/:id/workflow/runs/:run_id/nodes/:node_run_id/retry`
+
+从指定失败节点及其下游继续。服务端沿用该节点所属分支的成功上游变量检查点，创建新的运行和 attempt；仅允许重试终态为 `failed` 且符合权限范围的节点。
+
+**修订冲突 409**：`error.details.current_revision` 为服务端当前修订号。前端应提示刷新编辑器，**不要**覆盖重试。
+
+```json
+{"success": false, "error": {
+  "code": 1005,
+  "message": "Workflow draft was modified by another update; refresh and retry",
+  "details": {"current_revision": 15}
+}}
+```
+
+### GET `/agents/:id/workflow/versions`
+
+返回发布历史（版本号从新到旧）。已发布版本不可修改或覆盖。
+
+```json
+{"success": true, "data": [
+  {"version": 3, "draft_revision": 12, "definition": {}, "config_snapshot": {},
+   "published_by": "...", "published_at": "..."}
+]}
+```
+
+### GET `/agents/:id/workflow/runs`
+
+运行记录列表，游标分页。
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `limit` | integer | 每页条数，默认 20，上限 100；越界自动归一化 |
+| `status` | string | 按运行状态筛选：`running` / `succeeded` / `partial` / `failed` / `canceled` |
+| `started_after` | string | RFC3339 时间下界（含） |
+| `started_before` | string | RFC3339 时间上界（不含） |
+| `before_started_at` | string | 游标：上一页最后一条的 `started_at`（RFC3339） |
+| `before_id` | string | 游标：上一页最后一条的 `id`。**必须与 `before_started_at` 成对出现** |
+
+```json
+{"success": true, "data": {
+  "items": [{"id": "...", "started_at": "...", "status": "succeeded", "workflow_version": 3}],
+  "has_more": true,
+  "next_cursor": {"started_at": "...", "id": "..."}
+}}
+```
+
+`has_more` 为 `false` 时 `next_cursor` 为 `null`。
+
+### GET `/agents/:id/workflow/runs/:run_id`
+
+运行详情。`definition_snapshot` 是**当次执行的不可变快照**——渲染历史必须使用它，而不是当前的草稿或当前发布定义。`nodes` 为按 `sequence` 升序的节点记录数组。
+
+```json
+{"success": true, "data": {
+  "id": "...", "run_mode": "production", "requested_by": "user-1", "request_id": "req-1",
+  "idempotency_key": "chat:message-1", "status": "partial", "workflow_version": 3,
+  "trigger_source": "chat", "started_at": "...", "finished_at": "...", "duration_ms": 1234,
+  "input_summary": "...", "output_summary": "...", "error_code": "", "usage": {},
+  "definition_snapshot": {"schema_version": 2, "nodes": [], "edges": [], "viewport": {}},
+  "nodes": [
+    {"node_id": "llm-1", "node_name": "...", "node_type": "llm", "branch_path": "start/llm-1",
+     "sequence": 2, "attempt": 1, "retry_of": 0, "task_id": "...", "retryable": false,
+     "status": "succeeded", "duration_ms": 800, "output_summary": "..."}
+  ]
+}}
+```
+
+运行详情中的输入、输出、HTTP headers、工具参数和错误默认已经脱敏并按摘要上限截断；完整载荷只对所有者/Admin 可见。生命周期事件始终使用同一运行内单调递增的 `sequence`，并携带 `attempt`、`branch_path` 和结构化 `error_code`。
+
+记录不存在或不属于当前租户时返回 `404`。
+
 ## 相关文档
+
+- 工作流设计与语义：[工作流生产可用 V1](../workflow-production-v1.md)
 
 - 智能体的组织共享、跨空间分发与禁用（`/agents/:id/shares`、`/shared-agents` 等）：见 [组织管理 API](./organization.md)
 - 智能体绑定 IM 渠道（`/agents/:id/im-channels`）：见组织/IM 渠道相关文档

@@ -54,13 +54,20 @@ type workflowAgentRuntime interface {
 	) (*types.AgentState, error)
 }
 
+// workflowPathResult 是一条执行路径的结果。
+//
+// failures 与 handledFailures 的区别是状态归并的关键：沿失败处理分支继续执行的
+// 失败进入 handledFailures（用户显式写了错误分支，语义上已被消费），其余进入
+// failures（未处理失败），只有后者会把运行状态拉低到 partial/failed。
 type workflowPathResult struct {
-	successEnd bool
-	answers    []string
-	refs       []*types.SearchResult
-	steps      []types.AgentStep
-	failures   []string
-	usage      types.TokenUsage
+	successEnd      bool
+	answers         []string
+	refs            []*types.SearchResult
+	steps           []types.AgentStep
+	failures        []types.WorkflowNodeFailure
+	handledFailures []types.WorkflowNodeFailure
+	usage           types.TokenUsage
+	canceled        bool
 }
 
 type workflowNodeExecution struct {
@@ -78,6 +85,7 @@ type workflowExecutor struct {
 	rerankModel      rerank.Reranker
 	definition       *types.WorkflowDefinition
 	eventBus         *event.EventBus
+	observer         *workflowRunObserver
 	sessionID        string
 	assistantMessage string
 	requestID        string
@@ -85,12 +93,12 @@ type workflowExecutor struct {
 	semaphore        chan struct{}
 	stepMu           sync.Mutex
 	nextStepNumber   int
-	nodes               map[string]types.WorkflowNode
-	outgoing            map[string][]types.WorkflowEdge
-	incoming            map[string][]types.WorkflowEdge
-	finalAnswerStreamed bool
-	finalAnswerMu       sync.Mutex
-	finalAnswerEventID  string
+	nodes            map[string]types.WorkflowNode
+	outgoing         map[string][]types.WorkflowEdge
+	incoming         map[string][]types.WorkflowEdge
+	// finalAnswerEventID 是唯一一条最终答案事件的 ID；聚合后的答案只发一次，
+	// 旧的流式分片语义由这个 ID 承载 Done:true 收尾。
+	finalAnswerEventID string
 }
 
 // runWorkflowQA 执行已保存的工作流，并通过现有 Agent 事件总线输出结果。
@@ -100,6 +108,7 @@ type workflowExecutor struct {
 // @param agentConfig 已解析的运行时配置。
 // @param summaryModel 智能体顶层聊天模型。
 // @param eventBus 当前请求的事件总线。
+// @param publishedWorkflow 本次正式运行使用的不可变发布版本。
 // @returns 初始化或执行器不可用时返回错误；节点级失败会记录到事件和最终摘要中。
 func (s *sessionService) runWorkflowQA(
 	ctx context.Context,
@@ -107,59 +116,286 @@ func (s *sessionService) runWorkflowQA(
 	agentConfig *types.AgentConfig,
 	summaryModel chat.Chat,
 	eventBus *event.EventBus,
+	publishedWorkflow *types.WorkflowVersionRecord,
+) error {
+	return s.startPersistentWorkflowQA(ctx, req, agentConfig, eventBus, publishedWorkflow)
+
+	// The legacy in-process executor is kept below as a reference for the node
+	// semantics and test helpers. Formal runs return through the durable state
+	// machine above; only the editor debug API may use a draft snapshot.
+	/*
+		if req == nil || req.CustomAgent == nil || req.Session == nil {
+			return fmt.Errorf("workflow request is incomplete")
+		}
+		runtime, ok := s.agentService.(workflowAgentRuntime)
+		if !ok {
+			return fmt.Errorf("workflow runtime is unavailable")
+		}
+		if summaryModel == nil {
+			return fmt.Errorf("workflow chat model is unavailable")
+		}
+		if eventBus == nil {
+			return fmt.Errorf("workflow event bus is unavailable")
+		}
+		if publishedWorkflow == nil || publishedWorkflow.Version <= 0 {
+			return fmt.Errorf("workflow has not been published; publish it in the editor before running")
+		}
+		if err := workflowruntime.ValidatePublishedConfig(&req.CustomAgent.Config); err != nil {
+			return err
+		}
+		if req.CustomAgent.Config.Workflow == nil {
+			return fmt.Errorf("workflow definition is missing")
+		}
+		if provider, ok := s.agentService.(interface {
+			ValidateWorkflowResources(context.Context, *types.CustomAgentConfig) error
+		}); ok {
+			if err := provider.ValidateWorkflowResources(ctx, &req.CustomAgent.Config); err != nil {
+				return err
+			}
+		}
+
+		// 工作流里的知识检索此前不走 rerank：内置工具注册时 rerank 模型传 nil，
+		// knowledge_search 收到 nil 就静默降级，于是同一个知识库在工作流里的检索质量
+		// 系统性低于普通智能体。这里按普通智能体同样的方式解析 rerank 模型。
+		// 与普通路径的差别是"未配置就降级并告警"而非直接报错：工作流可能已经上线，
+		// 不能因为缺少可选配置就让所有历史工作流停止工作。
+		var rerankModel rerank.Reranker
+		if agentRequiresRerankModel(req.CustomAgent) {
+			rerankModelID := req.CustomAgent.Config.RerankModelID
+			if rerankModelID == "" {
+				logger.Warnf(ctx, "Workflow agent %s runs knowledge retrieval without a rerank model; retrieval quality will be lower than a normal agent", req.CustomAgent.ID)
+			} else if resolved, err := s.modelService.GetRerankModel(ctx, rerankModelID); err != nil {
+				logger.Warnf(ctx, "Failed to get rerank model %s for workflow agent: %v; continuing without rerank", rerankModelID, err)
+			} else {
+				rerankModel = resolved
+			}
+		}
+
+		releaseTurn := s.holdSandboxTurn(ctx, req.Session.ID, agentConfig.SandboxConfigID)
+		defer releaseTurn()
+
+		stagedAttachments, err := s.stageWorkflowAttachments(ctx, req, agentConfig)
+		if err != nil {
+			return err
+		}
+
+		inputQuery := req.Query
+		if req.QuotedContext != "" {
+			inputQuery += "\n\n" + req.QuotedContext
+		}
+		attachmentsText := ""
+		if req.ImageDescription != "" {
+			attachmentsText += "\n\n[用户上传图片内容]\n" + req.ImageDescription
+		}
+		if len(req.Attachments) > 0 {
+			attachmentsText += req.Attachments.BuildPrompt()
+		}
+		if manifest := buildSandboxAttachmentsPrompt(stagedAttachments); manifest != "" {
+			attachmentsText += manifest
+		}
+
+		definition := req.CustomAgent.Config.Workflow
+		nodes := make(map[string]types.WorkflowNode, len(definition.Nodes))
+		outgoing := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
+		incoming := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
+		startID := ""
+		for _, node := range definition.Nodes {
+			nodes[node.ID] = node
+			if node.Type == types.WorkflowNodeTypeStart {
+				startID = node.ID
+			}
+		}
+		for _, edge := range definition.Edges {
+			outgoing[edge.Source] = append(outgoing[edge.Source], edge)
+			incoming[edge.Target] = append(incoming[edge.Target], edge)
+		}
+		for nodeID := range outgoing {
+			outgoing[nodeID] = workflowruntime.SortedOutgoingEdges(outgoing[nodeID])
+		}
+		if startID == "" {
+			return fmt.Errorf("workflow start node is missing")
+		}
+
+		requestID, _ := types.RequestIDFromContext(ctx)
+		observer := newWorkflowRunObserver(
+			ctx,
+			eventBus,
+			workflowRunStoreFor(s.agentService),
+			publishedWorkflow,
+			definition,
+			agentConfig,
+			workflowRunTenantID(req),
+			req.CustomAgent.ID,
+			workflowRunTriggerSource(req),
+			req.Session.ID,
+			req.AssistantMessageID,
+			inputQuery,
+		)
+		executor := &workflowExecutor{
+			ctx:                ctx,
+			runtime:            runtime,
+			config:             agentConfig,
+			model:              summaryModel,
+			rerankModel:        rerankModel,
+			definition:         definition,
+			eventBus:           eventBus,
+			observer:           observer,
+			sessionID:          req.Session.ID,
+			assistantMessage:   req.AssistantMessageID,
+			requestID:          requestID,
+			inputQuery:         inputQuery,
+			semaphore:          make(chan struct{}, workflowruntime.MaxParallelNodes),
+			nodes:              nodes,
+			outgoing:           outgoing,
+			incoming:           incoming,
+			finalAnswerEventID: generateEventID("workflow-answer"),
+		}
+		variables := map[string]interface{}{
+			"input": map[string]interface{}{
+				"query":            inputQuery,
+				"attachments_text": attachmentsText,
+			},
+			"nodes": map[string]interface{}{},
+		}
+
+		startedAt := time.Now()
+		var result workflowPathResult
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.ErrorWithFields(ctx, fmt.Errorf("workflow execution panicked: %v", recovered),
+						map[string]interface{}{
+							"session_id": req.Session.ID,
+							"agent_id":   req.CustomAgent.ID,
+							"run_id":     observer.runID(),
+							"stack":      string(debug.Stack()),
+						})
+					result = workflowPathResult{
+						failures: []types.WorkflowNodeFailure{{
+							NodeID: startID,
+							Error:  "工作流执行时发生内部异常",
+						}},
+					}
+				}
+			}()
+			result = executor.executePath(startID, variables, "")
+		}()
+		for i := range result.steps {
+			result.steps[i].Iteration = i
+		}
+		result.refs = dedupeWorkflowReferences(result.refs)
+		result.failures = dedupeWorkflowFailures(result.failures)
+		result.handledFailures = dedupeWorkflowFailures(result.handledFailures)
+		canceled := result.canceled || ctx.Err() != nil
+		runStatus := types.ResolveWorkflowRunStatus(result.successEnd, result.failures, canceled)
+
+		finalAnswer := composeWorkflowAnswer(result, runStatus)
+		observer.finish(runStatus, finalAnswer, result.usage, result.failures)
+
+		if len(result.refs) > 0 {
+			if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
+				ID:        generateEventID("workflow-references"),
+				Type:      event.EventAgentReferences,
+				SessionID: req.Session.ID,
+				RequestID: requestID,
+				Data:      event.AgentReferencesData{References: result.refs},
+			}); err != nil {
+				logger.Warnf(ctx, "Failed to emit workflow references: %v", err)
+			}
+		}
+		if runStatus == types.WorkflowRunStatusFailed {
+			emitWorkflowFailureEvent(ctx, eventBus, req, requestID, finalAnswer)
+		} else if runStatus != types.WorkflowRunStatusCanceled {
+			// 取消后不发送缓冲答案：用户已经点了停止，再补一段答案会覆盖新的一轮。
+			emitWorkflowFinalAnswer(ctx, eventBus, req, requestID, executor.finalAnswerEventID, finalAnswer)
+		}
+
+		refs := make([]interface{}, 0, len(result.refs))
+		for _, ref := range result.refs {
+			refs = append(refs, ref)
+		}
+		var usage interface{}
+		if result.usage.TotalTokens > 0 {
+			usageCopy := result.usage
+			usage = &usageCopy
+		}
+		complete := event.Event{
+			ID:        generateEventID("workflow-complete"),
+			Type:      event.EventAgentComplete,
+			SessionID: req.Session.ID,
+			RequestID: requestID,
+			Data: event.AgentCompleteData{
+				SessionID:       req.Session.ID,
+				TotalSteps:      len(result.steps),
+				FinalAnswer:     finalAnswer,
+				KnowledgeRefs:   refs,
+				AgentSteps:      result.steps,
+				Usage:           usage,
+				TotalDurationMs: time.Since(startedAt).Milliseconds(),
+				MessageID:       req.AssistantMessageID,
+				RequestID:       requestID,
+				Extra:           workflowCompleteExtra(observer.runID(), runStatus, result),
+			},
+		}
+		if err := eventBus.Emit(context.WithoutCancel(ctx), complete); err != nil {
+			logger.Warnf(ctx, "Failed to emit workflow completion event: %v", err)
+		}
+		return nil
+	*/
+}
+
+// startPersistentWorkflowQA 为正式聊天入口创建绑定发布快照的 durable 运行。
+//
+// 请求线程只负责准备输入、写入根检查点并投递唤醒任务；节点执行、分支推进、
+// 重试和最终答案都由 WorkflowNodeTaskService 完成，因此草稿修改不会影响已启动运行。
+func (s *sessionService) startPersistentWorkflowQA(
+	ctx context.Context,
+	req *types.QARequest,
+	agentConfig *types.AgentConfig,
+	eventBus *event.EventBus,
+	publishedWorkflow *types.WorkflowVersionRecord,
 ) error {
 	if req == nil || req.CustomAgent == nil || req.Session == nil {
 		return fmt.Errorf("workflow request is incomplete")
 	}
-	runtime, ok := s.agentService.(workflowAgentRuntime)
-	if !ok {
-		return fmt.Errorf("workflow runtime is unavailable")
-	}
-	if summaryModel == nil {
-		return fmt.Errorf("workflow chat model is unavailable")
-	}
 	if eventBus == nil {
 		return fmt.Errorf("workflow event bus is unavailable")
 	}
-	if err := workflowruntime.NormalizeConfig(&req.CustomAgent.Config); err != nil {
+	if publishedWorkflow == nil || publishedWorkflow.Version <= 0 {
+		return fmt.Errorf("workflow has not been published; publish it in the editor before running")
+	}
+	if agentConfig == nil {
+		return fmt.Errorf("workflow runtime config is unavailable")
+	}
+	definition, publishedConfig, err := DecodeWorkflowVersionDefinition(publishedWorkflow)
+	if err != nil {
 		return err
 	}
-	if req.CustomAgent.Config.Workflow == nil {
-		return fmt.Errorf("workflow definition is missing")
+	if err := workflowruntime.ValidatePublishedConfig(publishedConfig); err != nil {
+		return err
 	}
 	if provider, ok := s.agentService.(interface {
 		ValidateWorkflowResources(context.Context, *types.CustomAgentConfig) error
 	}); ok {
-		if err := provider.ValidateWorkflowResources(ctx, &req.CustomAgent.Config); err != nil {
+		if err := provider.ValidateWorkflowResources(ctx, publishedConfig); err != nil {
 			return err
 		}
 	}
-
-	// 工作流里的知识检索此前不走 rerank：内置工具注册时 rerank 模型传 nil，
-	// knowledge_search 收到 nil 就静默降级，于是同一个知识库在工作流里的检索质量
-	// 系统性低于普通智能体。这里按普通智能体同样的方式解析 rerank 模型。
-	// 与普通路径的差别是"未配置就降级并告警"而非直接报错：工作流可能已经上线，
-	// 不能因为缺少可选配置就让所有历史工作流停止工作。
-	var rerankModel rerank.Reranker
-	if agentRequiresRerankModel(req.CustomAgent) {
-		rerankModelID := req.CustomAgent.Config.RerankModelID
-		if rerankModelID == "" {
-			logger.Warnf(ctx, "Workflow agent %s runs knowledge retrieval without a rerank model; retrieval quality will be lower than a normal agent", req.CustomAgent.ID)
-		} else if resolved, err := s.modelService.GetRerankModel(ctx, rerankModelID); err != nil {
-			logger.Warnf(ctx, "Failed to get rerank model %s for workflow agent: %v; continuing without rerank", rerankModelID, err)
-		} else {
-			rerankModel = resolved
+	startID := ""
+	for _, node := range definition.Nodes {
+		if node.Type == types.WorkflowNodeTypeStart {
+			startID = node.ID
+			break
 		}
 	}
-
-	releaseTurn := s.holdSandboxTurn(ctx, req.Session.ID, agentConfig.SandboxConfigID)
-	defer releaseTurn()
+	if startID == "" {
+		return fmt.Errorf("workflow start node is missing")
+	}
 
 	stagedAttachments, err := s.stageWorkflowAttachments(ctx, req, agentConfig)
 	if err != nil {
 		return err
 	}
-
 	inputQuery := req.Query
 	if req.QuotedContext != "" {
 		inputQuery += "\n\n" + req.QuotedContext
@@ -175,195 +411,234 @@ func (s *sessionService) runWorkflowQA(
 		attachmentsText += manifest
 	}
 
-	definition := req.CustomAgent.Config.Workflow
-	nodes := make(map[string]types.WorkflowNode, len(definition.Nodes))
-	outgoing := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
-	incoming := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
-	startID := ""
-	for _, node := range definition.Nodes {
-		nodes[node.ID] = node
-		if node.Type == types.WorkflowNodeTypeStart {
-			startID = node.ID
-		}
-	}
-	for _, edge := range definition.Edges {
-		outgoing[edge.Source] = append(outgoing[edge.Source], edge)
-		incoming[edge.Target] = append(incoming[edge.Target], edge)
-	}
-	for nodeID := range outgoing {
-		outgoing[nodeID] = workflowruntime.SortedOutgoingEdges(outgoing[nodeID])
-	}
-	if startID == "" {
-		return fmt.Errorf("workflow start node is missing")
-	}
-
+	input := map[string]interface{}{"query": inputQuery, "attachments_text": attachmentsText}
+	inputPayload := marshalRedactedWorkflowPayload(input)
+	now := time.Now()
 	requestID, _ := types.RequestIDFromContext(ctx)
-	executor := &workflowExecutor{
-		ctx:              ctx,
-		runtime:          runtime,
-		config:           agentConfig,
-		model:            summaryModel,
-		rerankModel:      rerankModel,
-		definition:       definition,
-		eventBus:         eventBus,
-		sessionID:        req.Session.ID,
-		assistantMessage: req.AssistantMessageID,
-		requestID:        requestID,
-		inputQuery:       inputQuery,
-		semaphore:        make(chan struct{}, workflowruntime.MaxParallelNodes),
-		nodes:              nodes,
-		outgoing:           outgoing,
-		incoming:           incoming,
-		finalAnswerEventID: generateEventID("workflow-answer"),
+	idempotencyKey := "chat:" + req.AssistantMessageID
+	if req.AssistantMessageID == "" {
+		idempotencyKey = "request:" + requestID
 	}
-	variables := map[string]interface{}{
-		"input": map[string]interface{}{
-			"query":            inputQuery,
-			"attachments_text": attachmentsText,
-		},
-		"nodes": map[string]interface{}{},
+	if idempotencyKey == "chat:" || idempotencyKey == "request:" {
+		idempotencyKey = "run:" + uuid.NewString()
 	}
-
-	startedAt := time.Now()
-	var result workflowPathResult
-	func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logger.ErrorWithFields(ctx, fmt.Errorf("workflow execution panicked: %v", recovered),
-					map[string]interface{}{
-						"session_id": req.Session.ID,
-						"agent_id":   req.CustomAgent.ID,
-						"stack":      string(debug.Stack()),
-					})
-				result = workflowPathResult{
-					failures: []string{"工作流执行时发生内部异常"},
-				}
-			}
-		}()
-		result = executor.executePath(startID, variables)
-	}()
-	for i := range result.steps {
-		result.steps[i].Iteration = i
+	requestedBy, _ := types.UserIDFromContext(ctx)
+	run := &types.WorkflowRun{
+		ID:                 generateEventID("workflow-run"),
+		TenantID:           workflowRunTenantID(req),
+		AgentID:            req.CustomAgent.ID,
+		WorkflowVersion:    publishedWorkflow.Version,
+		DraftRevision:      publishedWorkflow.DraftRevision,
+		DefinitionSnapshot: append(types.JSON(nil), publishedWorkflow.Definition...),
+		ConfigSnapshot:     append(types.JSON(nil), publishedWorkflow.ConfigSnapshot...),
+		InputPayload:       inputPayload,
+		RunMode:            types.WorkflowRunModeProduction,
+		RequestedBy:        requestedBy,
+		IdempotencyKey:     idempotencyKey,
+		TriggerSource:      workflowRunTriggerSource(req),
+		Status:             types.WorkflowRunStatusRunning,
+		SessionID:          req.Session.ID,
+		MessageID:          req.AssistantMessageID,
+		RequestID:          requestID,
+		StartedAt:          now,
+		CreatedAt:          now,
 	}
-	result.refs = dedupeWorkflowReferences(result.refs)
-	result.failures = uniqueWorkflowFailures(result.failures)
-
-	finalAnswer := ""
-	if result.successEnd {
-		finalAnswer = joinWorkflowAnswers(result.answers)
-		if len(result.failures) > 0 {
-			finalAnswer += "\n\n部分分支失败：\n- " + strings.Join(result.failures, "\n- ")
-		}
-		if strings.TrimSpace(finalAnswer) == "" {
-			finalAnswer = "工作流已完成。"
-		}
-	} else {
-		finalAnswer = "工作流执行失败。"
-		if len(result.failures) > 0 {
-			finalAnswer += "\n" + strings.Join(result.failures, "\n")
-		}
-		errEvent := event.Event{
-			ID:        generateEventID("workflow-error"),
-			Type:      event.EventError,
-			SessionID: req.Session.ID,
-			RequestID: requestID,
-			Data: event.ErrorData{
-				Error:     finalAnswer,
-				Stage:     "workflow_execution",
-				SessionID: req.Session.ID,
-				Query:     req.Query,
-			},
-		}
-		if err := eventBus.Emit(context.WithoutCancel(ctx), errEvent); err != nil {
-			logger.Warnf(ctx, "Failed to emit workflow error event: %v", err)
-		}
+	run.InputSummary, run.InputTruncated = sanitizeWorkflowSummary(inputQuery)
+	branch := &types.WorkflowRunBranch{
+		ID:            uuid.NewString(),
+		RunID:         run.ID,
+		TenantID:      run.TenantID,
+		AgentID:       run.AgentID,
+		CurrentNodeID: startID,
+		Variables:     marshalWorkflowVariables(map[string]interface{}{"input": input, "nodes": map[string]interface{}{}}),
+		Status:        types.WorkflowBranchStatusPending,
+		Version:       1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
-
-	if len(result.refs) > 0 {
-		if err := eventBus.Emit(ctx, event.Event{
-			ID:        generateEventID("workflow-references"),
-			Type:      event.EventAgentReferences,
-			SessionID: req.Session.ID,
-			RequestID: requestID,
-			Data:      event.AgentReferencesData{References: result.refs},
+	initiator := types.TaskInitiatorFromContext(ctx)
+	pending := newWorkflowPendingNode(run, branch.ID, startID, 1, 0, initiator, nil)
+	started := &types.WorkflowRunEvent{EventType: string(event.EventWorkflowRunStarted), Status: types.WorkflowRunStatusRunning}
+	starter, ok := s.agentService.(interface {
+		StartWorkflowRun(context.Context, *types.WorkflowRun, *types.WorkflowRunBranch, *types.TaskPendingOp, *types.WorkflowRunEvent) (*types.WorkflowRun, bool, error)
+	})
+	if !ok {
+		return fmt.Errorf("workflow durable runner is unavailable")
+	}
+	persisted, created, err := starter.StartWorkflowRun(ctx, run, branch, pending, started)
+	if err != nil {
+		return err
+	}
+	if created {
+		payload := types.WorkflowLifecycleEventData{
+			EventID: started.EventID, Sequence: started.Sequence, RunID: persisted.ID,
+			WorkflowVersion: persisted.WorkflowVersion, Status: started.Status,
+			OccurredAt: started.OccurredAt, Summary: persisted.InputSummary,
+		}
+		if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
+			ID: started.EventID, Type: event.EventWorkflowRunStarted,
+			SessionID: persisted.SessionID, RequestID: persisted.RequestID, Data: payload,
 		}); err != nil {
-			logger.Warnf(ctx, "Failed to emit workflow references: %v", err)
+			logger.Warnf(ctx, "failed to emit workflow run started event: %v", err)
 		}
-	}
-	answerID := executor.finalAnswerEventID
-	if answerID == "" {
-		answerID = generateEventID("workflow-answer")
-	}
-
-	executor.finalAnswerMu.Lock()
-	streamed := executor.finalAnswerStreamed
-	executor.finalAnswerMu.Unlock()
-
-	if streamed {
-		if err := eventBus.Emit(ctx, event.Event{
-			ID:        answerID,
-			Type:      event.EventAgentFinalAnswer,
-			SessionID: req.Session.ID,
-			RequestID: requestID,
-			Data:      event.AgentFinalAnswerData{Done: true},
-		}); err != nil {
-			logger.Warnf(ctx, "Failed to emit workflow answer done event: %v", err)
-		}
-	} else {
-		chunks := splitAnswerIntoStreamChunks(finalAnswer, 24)
-		for _, chunk := range chunks {
-			if err := eventBus.Emit(ctx, event.Event{
-				ID:        answerID,
-				Type:      event.EventAgentFinalAnswer,
-				SessionID: req.Session.ID,
-				RequestID: requestID,
-				Data:      event.AgentFinalAnswerData{Content: chunk},
-			}); err != nil {
-				logger.Warnf(ctx, "Failed to emit workflow answer chunk: %v", err)
-			}
-			time.Sleep(15 * time.Millisecond)
-		}
-		if err := eventBus.Emit(ctx, event.Event{
-			ID:        answerID,
-			Type:      event.EventAgentFinalAnswer,
-			SessionID: req.Session.ID,
-			RequestID: requestID,
-			Data:      event.AgentFinalAnswerData{Done: true},
-		}); err != nil {
-			logger.Warnf(ctx, "Failed to emit workflow answer done: %v", err)
-		}
-	}
-
-	refs := make([]interface{}, 0, len(result.refs))
-	for _, ref := range result.refs {
-		refs = append(refs, ref)
-	}
-	var usage interface{}
-	if result.usage.TotalTokens > 0 {
-		usageCopy := result.usage
-		usage = &usageCopy
-	}
-	complete := event.Event{
-		ID:        generateEventID("workflow-complete"),
-		Type:      event.EventAgentComplete,
-		SessionID: req.Session.ID,
-		RequestID: requestID,
-		Data: event.AgentCompleteData{
-			SessionID:       req.Session.ID,
-			TotalSteps:      len(result.steps),
-			FinalAnswer:     finalAnswer,
-			KnowledgeRefs:   refs,
-			AgentSteps:      result.steps,
-			Usage:           usage,
-			TotalDurationMs: time.Since(startedAt).Milliseconds(),
-			MessageID:       req.AssistantMessageID,
-			RequestID:       requestID,
-		},
-	}
-	if err := eventBus.Emit(context.WithoutCancel(ctx), complete); err != nil {
-		logger.Warnf(ctx, "Failed to emit workflow completion event: %v", err)
 	}
 	return nil
+}
+
+// workflowRunStoreFor 在 agentService 具备运行记录能力时返回其存储实现。
+//
+// 用窄接口断言而不是把方法加进 interfaces.AgentService：不落库的替身实现
+// 仍能完整跑通工作流，观测能力缺失不应成为执行的前置条件。
+//
+// @param service 当前会话服务持有的智能体服务。
+// @returns 运行记录存储；不支持时返回 nil。
+func workflowRunStoreFor(service interface{}) workflowRunStore {
+	store, ok := service.(workflowRunStore)
+	if !ok {
+		return nil
+	}
+	return store
+}
+
+// workflowRunTenantID 决定运行记录归属哪个租户。
+//
+// 共享智能体场景下智能体属于出借方租户，运行记录必须落在出借方，否则出借方
+// 在自己的运行列表里看不到被他人使用的轨迹。
+//
+// @param req 当前问答请求。
+// @returns 运行记录租户 ID。
+func workflowRunTenantID(req *types.QARequest) uint64 {
+	if req.CustomAgent != nil && req.CustomAgent.TenantID != 0 {
+		return req.CustomAgent.TenantID
+	}
+	if req.Session != nil {
+		return req.Session.TenantID
+	}
+	return 0
+}
+
+// workflowRunTriggerSource 推断本次运行的触发来源。
+//
+// @param req 当前问答请求。
+// @returns types.WorkflowTrigger* 之一。
+func workflowRunTriggerSource(req *types.QARequest) string {
+	if req.SharedAgentReadOnly {
+		return types.WorkflowTriggerShare
+	}
+	return types.WorkflowTriggerChat
+}
+
+// composeWorkflowAnswer 按运行状态决定对外暴露的答案文本。
+//
+// partial 状态把成功分支的结果与结构化失败列表一起给出：只发答案用户会以为
+// 工作流完整跑通，只发失败又丢掉了已经算出来的有效内容。
+//
+// @param result 一次运行的路径结果。
+// @param status types.WorkflowRunStatus* 之一。
+// @returns 最终答案文本；failed/canceled 时为空串。
+func composeWorkflowAnswer(result workflowPathResult, status string) string {
+	switch status {
+	case types.WorkflowRunStatusCanceled:
+		return ""
+	case types.WorkflowRunStatusFailed:
+		if message := workflowFailureMessage(result.failures); message != "" {
+			return "工作流执行失败。\n" + message
+		}
+		return "工作流执行失败。"
+	}
+	answer := joinWorkflowAnswers(result.answers)
+	if message := workflowFailureMessage(result.failures); message != "" {
+		answer += "\n\n部分分支失败：\n" + message
+	}
+	if strings.TrimSpace(answer) == "" {
+		answer = "工作流已完成。"
+	}
+	return answer
+}
+
+// workflowCompleteExtra 组装完成事件附带的工作流运行元数据。
+//
+// 失败列表放在 Extra 而不是新增 AgentCompleteData 字段：前端按需读取，
+// 旧的完成事件消费方不受影响，事件结构也保持单一来源。
+//
+// @param runID 运行记录 ID。
+// @param status types.WorkflowRunStatus* 之一。
+// @param result 一次运行的路径结果。
+// @returns 序列化进 AgentCompleteData.Extra 的元数据。
+func workflowCompleteExtra(runID, status string, result workflowPathResult) map[string]interface{} {
+	extra := map[string]interface{}{
+		"workflow_run_id":     runID,
+		"workflow_run_status": status,
+	}
+	if len(result.failures) > 0 {
+		extra["workflow_failures"] = result.failures
+	}
+	if len(result.handledFailures) > 0 {
+		extra["workflow_handled_failures"] = result.handledFailures
+	}
+	return extra
+}
+
+// emitWorkflowFailureEvent 在没有成功终点时发出可展示的错误事件。
+//
+// @param ctx 当前问答上下文。
+// @param eventBus 当前请求的事件总线。
+// @param req 当前问答请求。
+// @param requestID 当前请求 ID。
+// @param message 已聚合的失败描述。
+func emitWorkflowFailureEvent(
+	ctx context.Context,
+	eventBus *event.EventBus,
+	req *types.QARequest,
+	requestID, message string,
+) {
+	errEvent := event.Event{
+		ID:        generateEventID("workflow-error"),
+		Type:      event.EventError,
+		SessionID: req.Session.ID,
+		RequestID: requestID,
+		Data: event.ErrorData{
+			Error:     message,
+			Stage:     "workflow_execution",
+			SessionID: req.Session.ID,
+			Query:     req.Query,
+		},
+	}
+	if err := eventBus.Emit(context.WithoutCancel(ctx), errEvent); err != nil {
+		logger.Warnf(ctx, "Failed to emit workflow error event: %v", err)
+	}
+}
+
+// emitWorkflowFinalAnswer 一次性发送聚合后的最终答案。
+//
+// 旧实现边算边流式分片，同一个 end 节点被重复访问或多分支并行时会交错输出，
+// 用户看到的是拼接乱序的答案。现在节点只做缓冲，答案在这里按分支顺序聚合后
+// 只发一次，Done:true 仍沿用原有收尾语义。
+//
+// @param ctx 当前问答上下文。
+// @param eventBus 当前请求的事件总线。
+// @param req 当前问答请求。
+// @param requestID 当前请求 ID。
+// @param eventID 最终答案事件 ID。
+// @param answer 聚合后的答案文本。
+func emitWorkflowFinalAnswer(
+	ctx context.Context,
+	eventBus *event.EventBus,
+	req *types.QARequest,
+	requestID, eventID, answer string,
+) {
+	if strings.TrimSpace(answer) == "" {
+		return
+	}
+	if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
+		ID:        eventID,
+		Type:      event.EventAgentFinalAnswer,
+		SessionID: req.Session.ID,
+		RequestID: requestID,
+		Data:      event.AgentFinalAnswerData{Content: answer, Done: true},
+	}); err != nil {
+		logger.Warnf(ctx, "Failed to emit workflow final answer: %v", err)
+	}
 }
 
 func (s *sessionService) stageWorkflowAttachments(
@@ -392,13 +667,23 @@ func (s *sessionService) stageWorkflowAttachments(
 	)
 }
 
+// executePath 从指定节点开始同步执行一条分支。
+//
+// @param nodeID 本次执行的起始节点 ID。
+// @param variables 该分支独立的变量表。
+// @param branchPath 到达该节点前的执行路径（"/" 连接的节点 ID 序列），用于轨迹归因。
+// @returns 该分支的执行结果。
 func (e *workflowExecutor) executePath(
-	nodeID string, variables map[string]interface{},
+	nodeID string, variables map[string]interface{}, branchPath string,
 ) workflowPathResult {
 	node, ok := e.nodes[nodeID]
 	if !ok {
-		return workflowPathResult{failures: []string{fmt.Sprintf("节点 %s 不存在", nodeID)}}
+		return workflowPathResult{failures: []types.WorkflowNodeFailure{{
+			NodeID: nodeID,
+			Error:  fmt.Sprintf("节点 %s 不存在", nodeID),
+		}}}
 	}
+	nodePath := joinWorkflowBranchPath(branchPath, node.ID)
 
 	iteration := e.nextIteration()
 	callID := "workflow-" + uuid.NewString()
@@ -406,13 +691,26 @@ func (e *workflowExecutor) executePath(
 	callArgs := map[string]interface{}{"node_id": node.ID, "node_type": node.Type}
 	e.emitNodeCall(node, toolName, callID, callArgs, iteration)
 
+	// 运行已取消时尚未调度的节点直接标记 skipped，不再占用并行度；
+	// 与"正在执行时被取消"区分开，前端才能看出哪些节点根本没跑。
+	if e.ctx.Err() != nil {
+		nodeExecution := e.observer.nodeStarted(node, nodePath, e.nodeInputSummary(node, variables))
+		e.observer.nodeFinished(nodeExecution, types.WorkflowNodeStatusSkipped, "", types.TokenUsage{}, "", "")
+		return workflowPathResult{canceled: true}
+	}
+	callCtx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	nodeExecution := e.observer.nodeStarted(node, nodePath, e.nodeInputSummary(node, variables))
 	startedAt := time.Now()
-	if !e.acquire() {
-		return workflowPathResult{failures: []string{fmt.Sprintf("%s：工作流已取消", node.Name)}}
+	if !e.acquire(callCtx) {
+		// 取消时不把节点算作失败：用户主动停止与节点自身错误是两件事，
+		// 混在一起会让轨迹显示成"失败"并触发错误提示。
+		e.observer.nodeFinished(nodeExecution, types.WorkflowNodeStatusCanceled, "", types.TokenUsage{}, "", "")
+		return workflowPathResult{canceled: true}
 	}
 	execution, execErr := func() (workflowNodeExecution, error) {
 		defer e.release()
-		return e.executeNode(node, variables, callID)
+		return e.executeNode(callCtx, node, variables, callID)
 	}()
 	if execution.result == nil {
 		execution.result = &types.ToolResult{Success: execErr == nil}
@@ -422,6 +720,12 @@ func (e *workflowExecutor) executePath(
 		if execution.result.Error == "" {
 			execution.result.Error = execErr.Error()
 		}
+	}
+	if callCtx.Err() != nil && execErr != nil {
+		// 上下文取消会以任意错误形态浮上来（net/http、模型 SDK 各不相同），
+		// 用执行上下文的最终状态判定，避免把取消报成节点失败。
+		e.observer.nodeFinished(nodeExecution, types.WorkflowNodeStatusCanceled, "", execution.usage, "", "")
+		return workflowPathResult{canceled: true}
 	}
 	if !execution.result.Success {
 		if execution.result.Error == "" {
@@ -433,15 +737,29 @@ func (e *workflowExecutor) executePath(
 		e.publishFailedNodeOutput(node, execution, variables)
 		e.emitNodeResult(node, toolName, callID, execution.result, iteration, time.Since(startedAt))
 		step := e.syntheticStep(node, callID, callArgs, execution.result, iteration)
+		failure := types.WorkflowNodeFailure{
+			NodeID:     node.ID,
+			NodeName:   node.Name,
+			NodeType:   node.Type,
+			BranchPath: nodePath,
+			Error:      execution.result.Error,
+		}
+		e.observer.nodeFinished(
+			nodeExecution, types.WorkflowNodeStatusFailed,
+			execution.result.Output, execution.usage, failure.ErrorCode, failure.Error,
+		)
 		current := workflowPathResult{
-			steps:    []types.AgentStep{step},
-			usage:    execution.usage,
-			failures: []string{fmt.Sprintf("%s：%s", node.Name, execution.result.Error)},
+			steps: []types.AgentStep{step},
+			usage: execution.usage,
 		}
 		// 失败后仍要沿出边继续：用户用 nodes.<id>.status == "failed" 建的失败分支
-		// 必须有机会命中，否则错误处理形同虚设。条件边照常求值，命中的分支继续跑；
-		// 若没有任何条件边命中，则该分支到此为止（失败已记录）。
-		e.continueAfterFailure(node, variables, &current)
+		// 必须有机会命中，否则错误处理形同虚设。只有真正命中失败处理分支时，
+		// 这次失败才算"已处理"，否则进入未处理列表并拉低运行状态。
+		if e.continueAfterFailure(node, variables, nodePath, failure, &current) {
+			current.handledFailures = append(current.handledFailures, failure)
+		} else {
+			current.failures = append(current.failures, failure)
+		}
 		return current
 	}
 
@@ -472,6 +790,10 @@ func (e *workflowExecutor) executePath(
 	varsNodes[node.ID] = execution.output
 
 	e.emitNodeResult(node, toolName, callID, execution.result, iteration, time.Since(startedAt))
+	e.observer.nodeFinished(
+		nodeExecution, types.WorkflowNodeStatusSucceeded,
+		execution.output.Text, execution.usage, "", "",
+	)
 	step := e.syntheticStep(node, callID, callArgs, execution.result, iteration)
 	current := workflowPathResult{
 		steps: []types.AgentStep{step},
@@ -486,33 +808,130 @@ func (e *workflowExecutor) executePath(
 		return current
 	}
 
-	matched := make([]types.WorkflowEdge, 0)
-	var defaultEdge *types.WorkflowEdge
-	for _, edge := range e.outgoing[node.ID] {
-		if edge.IsDefault || (edge.Condition == nil && len(e.outgoing[node.ID]) == 1) {
-			candidate := edge
-			defaultEdge = &candidate
-			continue
-		}
-		ok, err := workflowruntime.EvaluateCondition(edge.Condition, variables)
-		if err != nil {
-			current.failures = append(current.failures, fmt.Sprintf("%s 路由条件：%s", node.Name, err))
-			continue
-		}
-		if ok {
-			matched = append(matched, edge)
-		}
-	}
-	if len(matched) == 0 && defaultEdge != nil {
-		matched = append(matched, *defaultEdge)
+	matched, routeErr := e.matchOutgoingEdges(node, variables)
+	if routeErr != nil {
+		current.failures = append(current.failures, *routeErr)
+		return current
 	}
 	if len(matched) == 0 {
-		current.failures = append(current.failures, fmt.Sprintf("%s 没有命中的路由", node.Name))
+		// 没有命中路由不是节点失败，而是路由配置覆盖不到当前运行时数据。
+		// 用独立错误码上报，前端才能把它和"节点自己报错"区分开。
+		current.failures = append(current.failures, types.WorkflowNodeFailure{
+			NodeID:     node.ID,
+			NodeName:   node.Name,
+			NodeType:   node.Type,
+			BranchPath: nodePath,
+			ErrorCode:  types.WorkflowErrorCodeNoMatchingBranch,
+			Error:      fmt.Sprintf("%s 没有命中的路由", node.Name),
+		})
 		return current
 	}
 
-	current.mergeChildren(e.runBranches(matched, variables))
+	current.mergeChildren(e.runBranches(matched, variables, nodePath))
 	return current
+}
+
+// matchOutgoingEdges 按节点的分支模式选出本次要执行的出边。
+//
+// first_match（默认）：按 order/ID 稳定顺序求值，取第一条命中条件的边，后续
+// 边不再求值——因此一个条件里的变量缺失不会影响已经选中的分支。没有条件边命中
+// 时退回默认边（edge.IsDefault，或单出边无条件的历史兼容场景）。
+//
+// all_match：保留原有并行语义，所有命中条件的边与默认边一起执行。
+//
+// @param node 当前节点。
+// @param variables 当前分支变量表。
+// @returns 待执行的出边；为空表示无路由可走。第二返回值为路由条件本身求值失败时的失败记录。
+func (e *workflowExecutor) matchOutgoingEdges(
+	node types.WorkflowNode, variables map[string]interface{},
+) ([]types.WorkflowEdge, *types.WorkflowNodeFailure) {
+	edges := e.outgoing[node.ID]
+	if len(edges) == 0 {
+		return nil, nil
+	}
+	var defaultEdge *types.WorkflowEdge
+	conditional := make([]types.WorkflowEdge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.IsDefault || (edge.Condition == nil && len(edges) == 1) {
+			candidate := edge
+			if defaultEdge == nil {
+				defaultEdge = &candidate
+			}
+			continue
+		}
+		conditional = append(conditional, edge)
+	}
+
+	if node.BranchMode == types.WorkflowBranchModeAllMatch {
+		matched := make([]types.WorkflowEdge, 0, len(conditional))
+		for _, edge := range conditional {
+			ok, err := workflowruntime.EvaluateCondition(edge.Condition, variables)
+			if err != nil {
+				return nil, &types.WorkflowNodeFailure{
+					NodeID:    node.ID,
+					NodeName:  node.Name,
+					NodeType:  node.Type,
+					ErrorCode: types.WorkflowErrorCodeNoMatchingBranch,
+					Error:     fmt.Sprintf("%s 路由条件：%s", node.Name, err),
+				}
+			}
+			if ok {
+				matched = append(matched, edge)
+			}
+		}
+		if defaultEdge != nil {
+			matched = append(matched, *defaultEdge)
+		}
+		return matched, nil
+	}
+
+	for _, edge := range conditional {
+		ok, err := workflowruntime.EvaluateCondition(edge.Condition, variables)
+		if err != nil {
+			return nil, &types.WorkflowNodeFailure{
+				NodeID:    node.ID,
+				NodeName:  node.Name,
+				NodeType:  node.Type,
+				ErrorCode: types.WorkflowErrorCodeNoMatchingBranch,
+				Error:     fmt.Sprintf("%s 路由条件：%s", node.Name, err),
+			}
+		}
+		if ok {
+			return []types.WorkflowEdge{edge}, nil
+		}
+	}
+	if defaultEdge != nil {
+		return []types.WorkflowEdge{*defaultEdge}, nil
+	}
+	return nil, nil
+}
+
+// joinWorkflowBranchPath 把父路径与当前节点拼接成该节点所在的执行路径。
+//
+// 并行分支各自只有一条从 start 出发的链，因此路径必须由调用方沿调用栈传递，
+// 不能从全局状态推断，否则并发下会互相串台。
+//
+// @param parent 父路径；根节点传空串。
+// @param nodeID 当前节点 ID。
+// @returns 以 "/" 连接的节点 ID 序列。
+func joinWorkflowBranchPath(parent, nodeID string) string {
+	if parent == "" {
+		return nodeID
+	}
+	return parent + "/" + nodeID
+}
+
+// nodeInputSummary 生成节点级输入摘要，用于运行记录与生命周期事件。
+//
+// 只取节点名与渲染前的变量规模，不落任何提示词或上游节点原文：这些内容可能
+// 含用户附件与凭据，落库后不可撤回。
+//
+// @param node 当前节点。
+// @param variables 当前分支变量表。
+// @returns 节点输入摘要。
+func (e *workflowExecutor) nodeInputSummary(node types.WorkflowNode, variables map[string]interface{}) string {
+	nodes, _ := variables["nodes"].(map[string]interface{})
+	return fmt.Sprintf("节点 %s(%s)，上游节点数 %d", node.Name, node.Type, len(nodes))
 }
 
 // runBranches 并行执行命中的出边，返回各分支结果。
@@ -520,8 +939,15 @@ func (e *workflowExecutor) executePath(
 // 每个子分支使用独立的变量表副本，互不影响；节点执行会进入工具/MCP/技能等第三方
 // 实现，其中任何未被捕获的 panic 都会终止整个进程——上层 QA goroutine 的 recover
 // 只保护同步执行的 start 节点，因此这里必须自行兜底，把 panic 降级为一次分支失败。
+//
+// 返回切片与 edges 顺序一一对应，调用方按序合并即可得到与出边顺序一致的确定性结果。
+//
+// @param edges 待执行的出边集合，已是稳定排序。
+// @param variables 父分支变量表。
+// @param branchPath 父分支的执行路径。
+// @returns 与 edges 同序的分支结果。
 func (e *workflowExecutor) runBranches(
-	edges []types.WorkflowEdge, variables map[string]interface{},
+	edges []types.WorkflowEdge, variables map[string]interface{}, branchPath string,
 ) []workflowPathResult {
 	children := make([]workflowPathResult, len(edges))
 	var wait sync.WaitGroup
@@ -533,18 +959,25 @@ func (e *workflowExecutor) runBranches(
 			defer wait.Done()
 			defer func() {
 				if recovered := recover(); recovered != nil {
+					target := e.nodes[edge.Target]
 					logger.ErrorWithFields(e.ctx, fmt.Errorf("workflow node panicked: %v", recovered),
 						map[string]interface{}{
 							"node_id":   edge.Target,
-							"node_name": e.nodes[edge.Target].Name,
+							"node_name": target.Name,
 							"stack":     string(debug.Stack()),
 						})
 					children[index] = workflowPathResult{
-						failures: []string{fmt.Sprintf("%s：执行时发生内部错误", e.nodes[edge.Target].Name)},
+						failures: []types.WorkflowNodeFailure{{
+							NodeID:     edge.Target,
+							NodeName:   target.Name,
+							NodeType:   target.Type,
+							BranchPath: joinWorkflowBranchPath(branchPath, edge.Target),
+							Error:      fmt.Sprintf("%s：执行时发生内部错误", target.Name),
+						}},
 					}
 				}
 			}()
-			children[index] = e.executePath(edge.Target, childVariables)
+			children[index] = e.executePath(edge.Target, childVariables, branchPath)
 		}()
 	}
 	wait.Wait()
@@ -584,15 +1017,26 @@ func (e *workflowExecutor) publishFailedNodeOutput(
 	varsNodes[node.ID] = output
 }
 
-// continueAfterFailure 在节点失败后沿"显式条件边"继续执行。
+// continueAfterFailure 在节点失败后沿"显式条件边"继续执行，并报告失败是否被处理。
 //
 // 只考虑带条件的出边：无条件的默认边代表正常路径，失败时沿它继续会把失败数据当
 // 成功结果往下传。跳过默认边同时也保证了与旧行为兼容——此前失败即终止分支，没有
 // 任何条件命中时依然终止，只有用户显式写出的错误分支（如 status == "failed"）才会
 // 被执行。
+//
+// @param node 失败节点。
+// @param variables 当前分支变量表。
+// @param branchPath 失败节点的执行路径。
+// @param failure 失败快照，用于状态归并。
+// @param current 当前路径结果，命中分支的结果会合并进来。
+// @returns 是否命中至少一条失败处理分支（即该失败是否已被处理）。
 func (e *workflowExecutor) continueAfterFailure(
-	node types.WorkflowNode, variables map[string]interface{}, current *workflowPathResult,
-) {
+	node types.WorkflowNode,
+	variables map[string]interface{},
+	branchPath string,
+	failure types.WorkflowNodeFailure,
+	current *workflowPathResult,
+) bool {
 	matched := make([]types.WorkflowEdge, 0)
 	for _, edge := range e.outgoing[node.ID] {
 		if edge.Condition == nil || edge.IsDefault {
@@ -600,7 +1044,12 @@ func (e *workflowExecutor) continueAfterFailure(
 		}
 		ok, err := workflowruntime.EvaluateCondition(edge.Condition, variables)
 		if err != nil {
-			current.failures = append(current.failures, fmt.Sprintf("%s 路由条件：%s", node.Name, err))
+			// 条件求值失败意味着这次失败没有匹配到有效的处理分支，
+			// 保留原因供最终状态判断，避免"处理分支写错了却显示成功"。
+			unmatched := failure
+			unmatched.ErrorCode = types.WorkflowErrorCodeNoMatchingBranch
+			unmatched.Error = fmt.Sprintf("%s 路由条件：%s", node.Name, err)
+			current.failures = append(current.failures, unmatched)
 			continue
 		}
 		if ok {
@@ -608,24 +1057,41 @@ func (e *workflowExecutor) continueAfterFailure(
 		}
 	}
 	if len(matched) == 0 {
-		return
+		return false
 	}
-	current.mergeChildren(e.runBranches(matched, variables))
+	current.mergeChildren(e.runBranches(matched, variables, branchPath))
+	return true
 }
 
 // mergeChildren 把并行子分支的结果合并到当前路径。
+//
+// 子分支按出边顺序传入，因此 answers/steps/failures 的追加顺序与出边顺序一致，
+// 最终答案在分支结构不变时是确定性的。
 func (current *workflowPathResult) mergeChildren(children []workflowPathResult) {
 	for _, child := range children {
 		current.successEnd = current.successEnd || child.successEnd
+		current.canceled = current.canceled || child.canceled
 		current.answers = append(current.answers, child.answers...)
 		current.refs = append(current.refs, child.refs...)
 		current.steps = append(current.steps, child.steps...)
 		current.failures = append(current.failures, child.failures...)
+		current.handledFailures = append(current.handledFailures, child.handledFailures...)
 		current.usage.Accumulate(child.usage)
 	}
 }
 
+// executeNode 分发到具体节点类型的执行实现。
+//
+// ctx 由调用方按节点派生：取消信号必须能穿透到 HTTP / LLM / MCP / Skill 这些
+// 真正的阻塞调用，否则用户点停止后节点会继续跑完并写入它的结果。
+//
+// @param ctx 节点执行上下文。
+// @param node 节点定义。
+// @param variables 当前分支变量表。
+// @param toolCallID 该节点对应的合成工具调用 ID。
+// @returns 节点执行结果以及底层错误。
 func (e *workflowExecutor) executeNode(
+	ctx context.Context,
 	node types.WorkflowNode,
 	variables map[string]interface{},
 	toolCallID string,
@@ -641,15 +1107,15 @@ func (e *workflowExecutor) executeNode(
 			result: &types.ToolResult{Success: true, Output: e.inputQuery, Data: map[string]interface{}{}},
 		}, nil
 	case types.WorkflowNodeTypeRetrieval:
-		return e.executeRetrieval(node, variables)
+		return e.executeRetrieval(ctx, node, variables)
 	case types.WorkflowNodeTypeLLM:
-		return e.executeLLM(node, variables)
+		return e.executeLLM(ctx, node, variables)
 	case types.WorkflowNodeTypeLLMDecision:
-		return e.executeLLMDecision(node, variables)
+		return e.executeLLMDecision(ctx, node, variables)
 	case types.WorkflowNodeTypeHTTP:
-		return e.executeHTTP(node, variables)
+		return e.executeHTTP(ctx, node, variables)
 	case types.WorkflowNodeTypeTool:
-		return e.executeTool(node, variables, toolCallID)
+		return e.executeTool(ctx, node, variables, toolCallID)
 	case types.WorkflowNodeTypeEnd:
 		return e.executeEnd(node, variables)
 	default:
@@ -657,8 +1123,14 @@ func (e *workflowExecutor) executeNode(
 	}
 }
 
+// executeRetrieval 执行知识库检索节点。
+//
+// @param ctx 节点执行上下文。
+// @param node 检索节点定义。
+// @param variables 当前分支变量表。
+// @returns 节点执行结果以及底层错误。
 func (e *workflowExecutor) executeRetrieval(
-	node types.WorkflowNode, variables map[string]interface{},
+	ctx context.Context, node types.WorkflowNode, variables map[string]interface{},
 ) (workflowNodeExecution, error) {
 	var cfg types.WorkflowRetrievalNodeConfig
 	if err := json.Unmarshal(node.Config, &cfg); err != nil {
@@ -677,7 +1149,7 @@ func (e *workflowExecutor) executeRetrieval(
 		"knowledge_base_ids": cfg.KnowledgeBaseIDs,
 	})
 	result, err := e.runtime.ExecuteWorkflowBuiltinTool(
-		e.ctx, e.config, agenttools.ToolKnowledgeSearch, args, e.sessionID, e.rerankModel,
+		ctx, e.config, agenttools.ToolKnowledgeSearch, args, e.sessionID, e.rerankModel,
 	)
 	if err != nil {
 		return workflowNodeExecution{result: result}, err
@@ -703,32 +1175,18 @@ func (e *workflowExecutor) executeRetrieval(
 	}, nil
 }
 
-// isTerminalAnswerNode 探测指定节点是否作为生成最终回答的直连终态节点。
-func (e *workflowExecutor) isTerminalAnswerNode(nodeID string) bool {
-	edges := e.outgoing[nodeID]
-	for _, edge := range edges {
-		targetNode, exists := e.nodes[edge.Target]
-		if exists && targetNode.Type == types.WorkflowNodeTypeEnd {
-			var endCfg types.WorkflowEndNodeConfig
-			if len(targetNode.Config) > 0 {
-				_ = json.Unmarshal(targetNode.Config, &endCfg)
-			}
-			tmpl := strings.TrimSpace(endCfg.TextTemplate)
-			if tmpl == "" || tmpl == fmt.Sprintf("{{nodes.%s.text}}", nodeID) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// executeLLM 执行通用大模型处理节点，支持自定义 Prompt 模板与流式文本生成。
+// executeLLM 执行通用大模型处理节点。
 //
+// 生成内容只做缓冲，不在这里直接推送最终答案事件：工作流可能有多个并行分支
+// 各自产出一段内容，边算边发会让前端收到交错拼接的答案。聚合与一次性下发由
+// runWorkflowQA 统一负责。
+//
+// @param ctx 节点执行上下文。
 // @param node 当前节点定义。
 // @param variables 上游上下文变量表。
 // @returns 节点执行结果；生成文本封装在 Text 与 Data["text"] 中。
 func (e *workflowExecutor) executeLLM(
-	node types.WorkflowNode, variables map[string]interface{},
+	ctx context.Context, node types.WorkflowNode, variables map[string]interface{},
 ) (workflowNodeExecution, error) {
 	var cfg types.WorkflowLLMNodeConfig
 	if err := json.Unmarshal(node.Config, &cfg); err != nil {
@@ -764,10 +1222,8 @@ func (e *workflowExecutor) executeLLM(
 		options.MaxCompletionTokens = *cfg.MaxTokens
 	}
 
-	callCtx, cancel := context.WithTimeout(e.ctx, workflowLLMTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, workflowLLMTimeout)
 	defer cancel()
-
-	isTerminal := e.isTerminalAnswerNode(node.ID)
 
 	stream, err := e.model.ChatStream(callCtx, messages, options)
 	if err != nil {
@@ -788,21 +1244,6 @@ func (e *workflowExecutor) executeLLM(
 		}
 		if chunk.Content != "" {
 			fullContent.WriteString(chunk.Content)
-			if isTerminal {
-				e.finalAnswerMu.Lock()
-				e.finalAnswerStreamed = true
-				e.finalAnswerMu.Unlock()
-
-				_ = e.eventBus.Emit(e.ctx, event.Event{
-					ID:        e.finalAnswerEventID,
-					Type:      event.EventAgentFinalAnswer,
-					SessionID: e.sessionID,
-					RequestID: e.requestID,
-					Data: event.AgentFinalAnswerData{
-						Content: chunk.Content,
-					},
-				})
-			}
 		}
 		if chunk.Usage != nil {
 			usage.Accumulate(*chunk.Usage)
@@ -825,8 +1266,14 @@ func (e *workflowExecutor) executeLLM(
 	}, nil
 }
 
+// executeLLMDecision 执行模型判断节点，返回一个候选标签。
+//
+// @param ctx 节点执行上下文。
+// @param node 判断节点定义。
+// @param variables 当前分支变量表。
+// @returns 节点执行结果以及底层错误。
 func (e *workflowExecutor) executeLLMDecision(
-	node types.WorkflowNode, variables map[string]interface{},
+	ctx context.Context, node types.WorkflowNode, variables map[string]interface{},
 ) (workflowNodeExecution, error) {
 	var cfg types.WorkflowLLMDecisionNodeConfig
 	if err := json.Unmarshal(node.Config, &cfg); err != nil {
@@ -851,7 +1298,7 @@ func (e *workflowExecutor) executeLLMDecision(
 		Format:              json.RawMessage(`{"type":"json_object"}`),
 		PromptCacheKey:      e.sessionID,
 	}
-	callCtx, cancel := context.WithTimeout(e.ctx, workflowLLMTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, workflowLLMTimeout)
 	defer cancel()
 	response, err := e.model.Chat(callCtx, messages, options)
 	if err != nil {
@@ -908,8 +1355,14 @@ func parseWorkflowDecision(content string, choices []string) (string, string, er
 	return "", "", fmt.Errorf("choice %q is not one of the configured labels", choice)
 }
 
+// executeHTTP 执行受 SSRF 防护约束的 HTTP 请求节点。
+//
+// @param ctx 节点执行上下文。
+// @param node HTTP 节点定义。
+// @param variables 当前分支变量表。
+// @returns 节点执行结果以及底层错误。
 func (e *workflowExecutor) executeHTTP(
-	node types.WorkflowNode, variables map[string]interface{},
+	ctx context.Context, node types.WorkflowNode, variables map[string]interface{},
 ) (workflowNodeExecution, error) {
 	var cfg types.WorkflowHTTPNodeConfig
 	if err := json.Unmarshal(node.Config, &cfg); err != nil {
@@ -933,7 +1386,7 @@ func (e *workflowExecutor) executeHTTP(
 	if bodyText != "" {
 		requestBody = bytes.NewBufferString(bodyText)
 	}
-	request, err := http.NewRequestWithContext(e.ctx, strings.ToUpper(cfg.Method), urlText, requestBody)
+	request, err := http.NewRequestWithContext(ctx, strings.ToUpper(cfg.Method), urlText, requestBody)
 	if err != nil {
 		return workflowNodeExecution{}, err
 	}
@@ -943,6 +1396,16 @@ func (e *workflowExecutor) executeHTTP(
 			return workflowNodeExecution{}, renderErr
 		}
 		request.Header.Set(name, rendered)
+	}
+	if strings.TrimSpace(cfg.IdempotencyKeyTemplate) != "" {
+		idempotencyKey, renderErr := workflowruntime.RenderTemplate(cfg.IdempotencyKeyTemplate, variables)
+		if renderErr != nil {
+			return workflowNodeExecution{}, renderErr
+		}
+		if strings.TrimSpace(idempotencyKey) == "" {
+			return workflowNodeExecution{}, fmt.Errorf("HTTP idempotency key rendered empty")
+		}
+		request.Header.Set("Idempotency-Key", idempotencyKey)
 	}
 	client := secutils.NewSSRFSafeHTTPClient(secutils.SSRFSafeHTTPClientConfig{
 		Timeout:      workflowHTTPTimeout,
@@ -981,8 +1444,15 @@ func (e *workflowExecutor) executeHTTP(
 	return workflowNodeExecution{output: output, result: result}, nil
 }
 
+// executeTool 执行内置工具、MCP 工具或受限 Skill 小智能体。
+//
+// @param ctx 节点执行上下文。
+// @param node 工具节点定义。
+// @param variables 当前分支变量表。
+// @param toolCallID 该节点对应的合成工具调用 ID。
+// @returns 节点执行结果以及底层错误。
 func (e *workflowExecutor) executeTool(
-	node types.WorkflowNode, variables map[string]interface{}, toolCallID string,
+	ctx context.Context, node types.WorkflowNode, variables map[string]interface{}, toolCallID string,
 ) (workflowNodeExecution, error) {
 	var cfg types.WorkflowToolNodeConfig
 	if err := json.Unmarshal(node.Config, &cfg); err != nil {
@@ -1002,12 +1472,12 @@ func (e *workflowExecutor) executeTool(
 	switch cfg.Kind {
 	case types.WorkflowToolKindBuiltin:
 		result, execErr := e.runtime.ExecuteWorkflowBuiltinTool(
-			e.ctx, e.config, cfg.ToolName, args, e.sessionID, e.rerankModel,
+			ctx, e.config, cfg.ToolName, args, e.sessionID, e.rerankModel,
 		)
 		return workflowExecutionFromToolResult(result), execErr
 	case types.WorkflowToolKindMCP:
 		result, execErr := e.runtime.ExecuteWorkflowMCPTool(
-			e.ctx, e.config, cfg.ServiceID, cfg.ToolName, args,
+			ctx, e.config, cfg.ServiceID, cfg.ToolName, args,
 			e.sessionID, e.assistantMessage, toolCallID, e.eventBus,
 		)
 		return workflowExecutionFromToolResult(result), execErr
@@ -1017,7 +1487,7 @@ func (e *workflowExecutor) executeTool(
 			return workflowNodeExecution{}, renderErr
 		}
 		state, execErr := e.runtime.ExecuteWorkflowSkill(
-			e.ctx, e.config, e.model, cfg.SkillName, task, e.sessionID, e.assistantMessage,
+			ctx, e.config, e.model, cfg.SkillName, task, e.sessionID, e.assistantMessage,
 		)
 		if execErr != nil {
 			return workflowNodeExecution{}, execErr
@@ -1089,11 +1559,18 @@ func (e *workflowExecutor) executeEnd(
 	}, nil
 }
 
-func (e *workflowExecutor) acquire() bool {
+// acquire 以节点执行上下文抢占并行度信号量。
+//
+// 用节点自己的 ctx（派生自运行上下文）而非运行上下文本身，是为了让取消能立刻
+// 释放还在排队等待的节点，而不是等信号量空出来。
+//
+// @param ctx 节点执行上下文。
+// @returns 是否成功获得执行许可。
+func (e *workflowExecutor) acquire(ctx context.Context) bool {
 	select {
 	case e.semaphore <- struct{}{}:
 		return true
-	case <-e.ctx.Done():
+	case <-ctx.Done():
 		return false
 	}
 }
@@ -1288,23 +1765,6 @@ func dedupeWorkflowReferences(refs []*types.SearchResult) []*types.SearchResult 
 	return out
 }
 
-func uniqueWorkflowFailures(failures []string) []string {
-	seen := make(map[string]struct{}, len(failures))
-	out := make([]string, 0, len(failures))
-	for _, failure := range failures {
-		failure = strings.TrimSpace(failure)
-		if failure == "" {
-			continue
-		}
-		if _, ok := seen[failure]; ok {
-			continue
-		}
-		seen[failure] = struct{}{}
-		out = append(out, failure)
-	}
-	return out
-}
-
 func joinWorkflowAnswers(answers []string) string {
 	parts := make([]string, 0, len(answers))
 	for _, answer := range answers {
@@ -1343,27 +1803,4 @@ func appendWorkflowArtifactLinks(answer string, artifacts types.MessageArtifacts
 		b.WriteString(")\n")
 	}
 	return b.String()
-}
-
-// splitAnswerIntoStreamChunks 按 unicode rune 切分整块答案，用于非 LLM 直出场景下的平滑流式推送。
-func splitAnswerIntoStreamChunks(text string, chunkSize int) []string {
-	if text == "" {
-		return nil
-	}
-	if chunkSize <= 0 {
-		chunkSize = 20
-	}
-	runes := []rune(text)
-	if len(runes) <= chunkSize {
-		return []string{text}
-	}
-	var chunks []string
-	for i := 0; i < len(runes); i += chunkSize {
-		end := i + chunkSize
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunks = append(chunks, string(runes[i:end]))
-	}
-	return chunks
 }

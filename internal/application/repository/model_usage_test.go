@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS custom_agents (
     tenant_id INTEGER NOT NULL,
     created_by VARCHAR(36),
     config TEXT NOT NULL DEFAULT '{}',
+    draft_revision INTEGER NOT NULL DEFAULT 0,
+    published_version INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted_at DATETIME,

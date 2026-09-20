@@ -3150,6 +3150,72 @@ func (s *installAgentService) CreateAgentEngine(
 
 func (s *installAgentService) ValidateConfig(*types.AgentConfig) error { return nil }
 
+// installAgentService 是 skill 安装流程的测试替身。工作流生产可用给
+// interfaces.AgentService 增加了发布/版本/校验/运行审计方法，这里全部以
+// 未实现兜底：安装流程不涉及工作流持久化，任何调用都说明测试构造有误。
+func (s *installAgentService) PublishWorkflow(
+	context.Context, string, int64,
+) (*types.WorkflowVersionRecord, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) ListWorkflowVersions(
+	context.Context, string,
+) ([]*types.WorkflowVersionRecord, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) GetWorkflowVersion(
+	context.Context, string, int64,
+) (*types.WorkflowVersionRecord, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) RestoreWorkflowVersion(
+	context.Context, string, int64, int64,
+) (*types.CustomAgent, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) GetPublishedWorkflow(
+	context.Context, string,
+) (*types.WorkflowVersionRecord, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) ValidateWorkflowDefinition(
+	context.Context, *types.CustomAgentConfig,
+) ([]types.WorkflowValidationIssue, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) ListWorkflowRuns(
+	context.Context, string, types.WorkflowRunQuery,
+) ([]*types.WorkflowRun, bool, error) {
+	return nil, false, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) GetWorkflowRun(
+	context.Context, string, string,
+) (*types.WorkflowRun, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) ListWorkflowRunEvents(
+	context.Context, string, string, int64, int,
+) ([]*types.WorkflowRunEvent, error) {
+	return nil, errInstallAgentServiceWorkflowUnsupported
+}
+
+func (s *installAgentService) RequestWorkflowRunCancel(
+	context.Context, string, string,
+) (*types.WorkflowRun, bool, error) {
+	return nil, false, errInstallAgentServiceWorkflowUnsupported
+}
+
+var errInstallAgentServiceWorkflowUnsupported = errors.New(
+	"installAgentService does not support workflow persistence")
+
 type installAgentEngine struct {
 	sink types.SteerSink
 	fx   *installFixture

@@ -17,6 +17,17 @@ type customAgentRepository struct {
 	db *gorm.DB
 }
 
+// SaveWorkflowDraft 通过工作流仓储原子保存草稿，供工作流专用服务使用。
+func (r *customAgentRepository) SaveWorkflowDraft(
+	ctx context.Context,
+	tenantID uint64,
+	agentID string,
+	expectedRevision int64,
+	agent *types.CustomAgent,
+) error {
+	return NewWorkflowRepository(r.db).SaveDraft(ctx, tenantID, agentID, expectedRevision, agent)
+}
+
 // NewCustomAgentRepository creates a new custom agent repository
 func NewCustomAgentRepository(db *gorm.DB) interfaces.CustomAgentRepository {
 	return &customAgentRepository{db: db}

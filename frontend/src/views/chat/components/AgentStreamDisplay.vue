@@ -214,7 +214,14 @@
                     <div class="results-summary-text" v-html="getAttachmentParsingSummary(event)"></div>
                   </div>
 
-                    <div v-if="isEventExpanded(event.tool_call_id) && !event.pending && hasExpandableResults(event)"
+                  <!-- 工作流节点：output 直接内联展示，无需点击 -->
+                  <div v-if="!event.pending && (event.is_workflow || event.tool_name?.startsWith('workflow.')) && event.output"
+                    class="action-details workflow-node-output">
+                    <div class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
+                  </div>
+
+                  <!-- 其他工具：点击展开 -->
+                  <div v-else-if="isEventExpanded(event.tool_call_id) && !event.pending && hasExpandableResults(event) && !(event.is_workflow || event.tool_name?.startsWith('workflow.'))"
                     class="action-details">
                     <BrowserToolDetails v-if="event.tool_name === 'local_browser'" :event="event" />
                     <div v-else-if="resolveToolDisplayType(event)" class="tool-result-wrapper">
@@ -223,11 +230,10 @@
                     </div>
                     <div v-else-if="event.output" class="tool-output-wrapper">
                       <div class="fallback-header">
-                        <span class="fallback-label">{{ (event.is_workflow || event.tool_name?.startsWith('workflow.')) ? ($t('workflow.nodeOutput') || '节点输出') : $t('chat.rawOutputLabel') }}</span>
+                        <span class="fallback-label">{{ $t('chat.rawOutputLabel') }}</span>
                       </div>
                       <div class="detail-output-wrapper">
-                        <div v-if="event.is_workflow || event.tool_name?.startsWith('workflow.')" class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
-                        <div v-else class="detail-output">{{ event.output }}</div>
+                        <div class="detail-output">{{ event.output }}</div>
                       </div>
                     </div>
                     <!-- Raw arguments hidden for user-friendly display -->
@@ -511,21 +517,27 @@
                   <div class="results-summary-text" v-html="getAttachmentParsingSummary(event)"></div>
                 </div>
 
-                <div v-if="isEventExpanded(event.tool_call_id) && !event.pending && hasExpandableResults(event)"
+                <!-- 工作流节点：output 直接内联展示，无需点击 -->
+                <div v-if="!event.pending && (event.is_workflow || event.tool_name?.startsWith('workflow.')) && event.output"
+                  class="action-details workflow-node-output">
+                  <div class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
+                </div>
+
+                <!-- 其他工具：点击展开 -->
+                <div v-else-if="isEventExpanded(event.tool_call_id) && !event.pending && hasExpandableResults(event) && !(event.is_workflow || event.tool_name?.startsWith('workflow.'))"
                   class="action-details">
                   <BrowserToolDetails v-if="event.tool_name === 'local_browser'" :event="event" />
-                    <div v-else-if="resolveToolDisplayType(event)" class="tool-result-wrapper">
+                  <div v-else-if="resolveToolDisplayType(event)" class="tool-result-wrapper">
                     <ToolResultRenderer :display-type="resolveToolDisplayType(event)" :tool-data="event.tool_data"
                       :output="mcpToolResultOutput(event)" :arguments="event.arguments" :success="event.success" />
                   </div>
 
                   <div v-else-if="event.output" class="tool-output-wrapper">
                     <div class="fallback-header">
-                      <span class="fallback-label">{{ (event.is_workflow || event.tool_name?.startsWith('workflow.')) ? ($t('workflow.nodeOutput') || '节点输出') : $t('chat.rawOutputLabel') }}</span>
+                      <span class="fallback-label">{{ $t('chat.rawOutputLabel') }}</span>
                     </div>
                     <div class="detail-output-wrapper">
-                      <div v-if="event.is_workflow || event.tool_name?.startsWith('workflow.')" class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
-                      <div v-else class="detail-output">{{ event.output }}</div>
+                      <div class="detail-output">{{ event.output }}</div>
                     </div>
                   </div>
 
@@ -3738,6 +3750,23 @@ const handleAddToKnowledge = (answerEvent: any) => {
   background: transparent;
   display: flex;
   flex-direction: column;
+
+  // 工作流节点输出内联区域：轻量柔和的引用块风格
+  &.workflow-node-output {
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--td-bg-color-container-hover, rgba(0, 0, 0, 0.03));
+    border-left: 2px solid var(--td-brand-color-light-5, #bdd2fa);
+
+    .detail-output {
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--td-text-color-secondary);
+      max-height: 240px;
+      overflow-y: auto;
+    }
+  }
 }
 
 .tool-result-wrapper {

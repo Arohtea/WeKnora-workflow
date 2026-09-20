@@ -97,7 +97,8 @@ function buildEdge(spec: EdgeSpec): WorkflowEdge {
 
 function buildDefinition(nodes: NodeSpec[], edges: EdgeSpec[]): WorkflowDefinition {
   return {
-    version: 1,
+    version: 2,
+    schema_version: 2,
     nodes: nodes.map(buildNode),
     edges: edges.map(buildEdge),
     viewport: { ...BASE_VIEWPORT },

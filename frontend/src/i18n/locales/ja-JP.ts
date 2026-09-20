@@ -3566,6 +3566,10 @@ export default {
     referencesWebCount: '{count}件のWebページを参照',
     referencesDocAndWebCount: '{docCount}件のドキュメントと{webCount}件のWebページを参照',
     referencesDrawerTitle: '出典',
+    workflowGraph: '実行グラフ',
+    expandWorkflowGraph: '実行グラフを展開',
+    collapseWorkflowGraph: '実行グラフを折りたたむ',
+    workflowRunning: 'ワークフロー実行中',
     referencesDrawerTitleWeb: 'Webの出典',
     referencesDrawerTitleDocs: 'ドキュメントの出典',
     referencesDrawerTitleTools: 'ツールの実行結果',
@@ -7197,10 +7201,36 @@ export default {
     title: 'ワークフロー',
     subtitle: '「検索、判定、回答」などの固定手順を自動化し、確実なプロセスで実行します',
     createWorkflow: 'ワークフロー作成',
+    importWorkflow: 'ワークフローをインポート',
+    exportWorkflow: 'ワークフローをエクスポート',
+    workflowNode: 'ワークフローノード',
+    nodeOutput: 'ノード出力',
+    workflowGraph: 'ワークフローグラフ',
+    liveTrace: '実行トレース',
+    nodeType: {
+      start: '開始ノード',
+      end: '終了ノード',
+      llm: 'LLM処理',
+      'llm-decision': 'ルーティング判定',
+      'knowledge-retrieval': 'ナレッジ検索',
+      'http-request': 'HTTPリクエスト',
+      tool: 'ツール呼び出し',
+    },
     messages: {
       created: 'ワークフローが作成されました',
+      updated: 'ワークフローが更新されました',
       deleted: 'ワークフローが削除されました',
       deleteFailed: 'ワークフローの削除に失敗しました',
+      saveFailed: 'ワークフローの保存に失敗しました',
+      nameRequired: 'ワークフロー名を入力してください',
+      importSuccess: 'ワークフローをインポートしました',
+      importFailed: 'ワークフローのインポートに失敗しました',
+      exportSuccess: 'ワークフローをエクスポートしました',
+      exportFailed: 'ワークフローのエクスポートに失敗しました',
+    },
+    confirm: {
+      importOverwriteTitle: 'ワークフローのインポートを確認',
+      importOverwrite: '新しいワークフローをインポートすると、現在のキャンバスのノードと接続がすべて置き換えられます。続行しますか？',
     },
     delete: {
       confirmTitle: 'ワークフローの削除',
@@ -7222,4 +7252,3 @@ export default {
     },
   }
 }
-

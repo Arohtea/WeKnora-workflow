@@ -35,7 +35,7 @@ test('referenced knowledge bases and agents open their relevant configuration pa
     /editingAgent\.value\?\.id === agent\.id[\s\S]*focusAgentEditorSection\(requestedSection\)[\s\S]*editorVisible\.value = false\s*await nextTick\(\)\s*if \(generation !== editOpenGeneration\) return[\s\S]*editorVisible\.value = true/,
   )
   assert.match(agentListSource, /const agent = resolveAgentForEdit\([\s\S]*if \(!agent\) return[\s\S]*router\.replace/)
-  assert.match(agentEditorSource, /v-if="editorInitializing"[\s\S]*:disabled="editorInitializing"/)
+  assert.match(agentEditorSource, /editorInitializing[\s\S]*:disabled="[^"]*editorInitializing/)
   assert.match(agentEditorSource, /generation !== editorInitializationGeneration \|\| !props\.visible/)
   assert.match(knowledgeBaseEditorSource, /v-if="loading"[\s\S]*:disabled="loading"/)
   assert.match(knowledgeBaseEditorSource, /isCurrentKBLoad\(generation, kbId\)/)

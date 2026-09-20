@@ -18,6 +18,9 @@ export type WorkflowNodeType =
   | 'tool'
   | 'end';
 
+/** 分支模式：first_match 按稳定顺序只执行首个命中的分支；all_match 并行执行全部命中的分支。 */
+export type WorkflowBranchMode = 'first_match' | 'all_match';
+
 export interface WorkflowLLMNodeConfig {
   system_prompt?: string;
   prompt: string;
@@ -54,6 +57,8 @@ export interface WorkflowNode {
   type: WorkflowNodeType;
   name: string;
   position: WorkflowPosition;
+  /** 分支模式：first_match=按顺序只走首个命中分支；all_match=并行执行全部命中分支；新建节点默认 first_match。 */
+  branch_mode?: WorkflowBranchMode;
   config: Record<string, unknown>;
 }
 
@@ -69,6 +74,8 @@ export interface WorkflowEdge {
 }
 
 export interface WorkflowDefinition {
+  /** 导入导出与新接口使用的明确格式版本；后端读写该字段，旧数据可能缺省。 */
+  schema_version?: number;
   version: number;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -243,6 +250,14 @@ export interface CustomAgent {
   avatar?: string;
   is_builtin: boolean;
   tenant_id?: number;
+  /**
+   * 草稿修订号：每次保存工作流草稿自增，用于保存时的乐观锁（从 1 开始）。
+   * 注意：保存接口的后端 UpdateAgentRequest DTO 尚未声明 expected_revision
+   * （见 internal/handler/custom_agent.go 的 UpdateAgentRequest），当前传了也会被忽略。
+   */
+  draft_revision?: number;
+  /** 当前对外生效的不可变发布版本号；0 表示从未发布。 */
+  published_version?: number;
   created_by?: string;
   // creator_name 由后端 list 接口批量回填，仅用于列表卡片来源徽章。
   creator_name?: string;
@@ -265,6 +280,11 @@ export interface UpdateAgentRequest {
   description?: string;
   avatar?: string;
   config?: CustomAgentConfig;
+  /**
+   * 保存工作流草稿时回传的乐观锁修订号，字段名与发布接口保持一致。
+   * 后端 DTO 支持前该字段会被忽略；一旦后端补上即可直接生效。
+   */
+  expected_revision?: number;
 }
 
 // 内置智能体 ID（常用的保留常量，便于代码引用）
@@ -513,4 +533,241 @@ export function getWeChatQRCode() {
 
 export function pollWeChatQRCodeStatus(qrcode: string) {
   return post<{ data: WeChatQRCodeStatus }>('/api/v1/wechat/qrcode/status', { qrcode });
+}
+
+// ===== 工作流发布 / 运行记录 =====
+
+/** 运行状态：与后端 types.WorkflowRunStatus* 一一对应。 */
+export type WorkflowRunStatus = 'running' | 'succeeded' | 'partial' | 'failed' | 'canceled';
+
+/** 触发来源：决定这条运行是从哪个入口触发的。 */
+export type WorkflowRunTriggerSource = 'chat' | 'share' | 'im' | 'embed' | 'debug';
+
+/** 不可变的工作流发布版本快照（对应后端 WorkflowVersionRecord）。 */
+export interface WorkflowVersionRecord {
+  tenant_id: number;
+  agent_id: string;
+  version: number;
+  /** 发布时的草稿修订号；与当前草稿 revision 比较即可判定是否有未发布修改。 */
+  draft_revision: number;
+  definition: WorkflowDefinition;
+  /** 发布时的智能体配置快照；旧版本可能为空。 */
+  config_snapshot?: CustomAgentConfig;
+  published_by?: string;
+  published_at: string;
+}
+
+/** 结构化校验问题；node_id/edge_id/field_path 用于把问题定位回画布。 */
+export interface WorkflowValidationIssue {
+  code: string;
+  message: string;
+  node_id?: string;
+  edge_id?: string;
+  field_path?: string;
+}
+
+export interface WorkflowDebugInput {
+  query: string;
+  attachments_text?: string;
+}
+
+export interface WorkflowImportResourceMapping {
+  kind: string;
+  reference: string;
+  resolved_id?: string;
+  status: 'available' | 'missing' | string;
+}
+
+export interface WorkflowImportPreview {
+  config?: CustomAgentConfig;
+  definition?: WorkflowDefinition;
+  issues: WorkflowValidationIssue[];
+  warnings: WorkflowValidationIssue[];
+  missing_resources: string[];
+  sensitive_fields: string[];
+  resource_mappings: WorkflowImportResourceMapping[];
+}
+
+/** 单次运行中的节点执行记录（对应后端 WorkflowRunNode）。 */
+export interface WorkflowRunNode {
+  id: number;
+  run_id: string;
+  node_id: string;
+  node_name: string;
+  node_type: string;
+  /** 分支路径：并行分支下用路径区分同一节点在不同分支中的执行。 */
+  branch_path: string;
+  sequence: number;
+  attempt: number;
+  retry_of?: number;
+  task_id?: string;
+  retryable: boolean;
+  status: string;
+  input_summary?: string;
+  input_truncated?: boolean;
+  output_summary?: string;
+  output_truncated?: boolean;
+  error_summary?: string;
+  error_truncated?: boolean;
+  usage?: Record<string, unknown>;
+  started_at?: string;
+  finished_at?: string;
+  duration_ms: number;
+}
+
+/** 一次绑定到不可变版本的工作流执行（对应后端 WorkflowRun）。 */
+export interface WorkflowRun {
+  id: string;
+  tenant_id: number;
+  agent_id: string;
+  workflow_version: number;
+  draft_revision: number;
+  /** 当次运行的定义快照：详情必须用它渲染，不能加载当前草稿。 */
+  definition_snapshot: WorkflowDefinition;
+  run_mode: 'production' | 'debug' | string;
+  trigger_source: WorkflowRunTriggerSource;
+  status: WorkflowRunStatus;
+  requested_by?: string;
+  idempotency_key?: string;
+  cancel_requested_at?: string;
+  last_heartbeat_at?: string;
+  session_id?: string;
+  message_id?: string;
+  request_id?: string;
+  input_summary?: string;
+  input_truncated?: boolean;
+  output_summary?: string;
+  output_truncated?: boolean;
+  error_code?: string;
+  error_summary?: string;
+  error_truncated?: boolean;
+  usage?: Record<string, unknown>;
+  started_at: string;
+  finished_at?: string;
+  duration_ms: number;
+  created_at: string;
+  nodes?: WorkflowRunNode[];
+}
+
+/** 运行列表的游标：指向上一页最后一条记录，两个字段必须成对回传。 */
+export interface WorkflowRunCursor {
+  started_at: string;
+  id: string;
+}
+
+export interface WorkflowRunListResponse {
+  items: WorkflowRun[];
+  has_more: boolean;
+  next_cursor: WorkflowRunCursor | null;
+}
+
+export interface ListWorkflowRunsParams {
+  /** 每页数量，默认 20、上限 100。 */
+  limit?: number;
+  status?: WorkflowRunStatus;
+  /** RFC3339，筛选起始时间（含）。 */
+  started_after?: string;
+  /** RFC3339，筛选结束时间（不含）。 */
+  started_before?: string;
+  /** 游标：上一页最后一条的 started_at（RFC3339）。 */
+  before_started_at?: string;
+  /** 游标：上一页最后一条的 id。必须与 before_started_at 同时提供。 */
+  before_id?: string;
+}
+
+/**
+ * 发布工作流草稿为新的不可变版本。
+ * expected_revision 是客户端最后看到的草稿修订号，用于乐观锁；与当前草稿不一致时后端返回 409。
+ */
+export function publishWorkflow(id: string, expectedRevision: number) {
+  return post<{ data: WorkflowVersionRecord }>(`/api/v1/agents/${id}/workflow/publish`, {
+    expected_revision: expectedRevision,
+  });
+}
+
+// 获取工作流发布历史，按版本号从新到旧
+export function listWorkflowVersions(id: string) {
+  return get<{ data: WorkflowVersionRecord[] }>(`/api/v1/agents/${id}/workflow/versions`);
+}
+
+/** 获取指定不可变版本，详情不受当前草稿影响。 */
+export function getWorkflowVersion(id: string, version: number) {
+  return get<{ data: WorkflowVersionRecord }>(`/api/v1/agents/${id}/workflow/versions/${version}`);
+}
+
+/** 将不可变版本复制为新的草稿修订，不会自动发布。 */
+export function restoreWorkflowVersion(id: string, version: number, expectedRevision: number) {
+  return post<{ data: CustomAgent }>(`/api/v1/agents/${id}/workflow/versions/${version}/restore`, {
+    expected_revision: expectedRevision,
+  });
+}
+
+// 结构化校验工作流定义，不落库；用于发布前把问题定位回编辑器
+export function validateWorkflowDefinition(id: string, config: CustomAgentConfig) {
+  return post<{ data: WorkflowValidationIssue[] }>(`/api/v1/agents/${id}/workflow/validate`, { config });
+}
+
+/** 服务端预检导入文件，返回脱敏后的归一化定义和资源映射。 */
+export function previewWorkflowImport(id: string, document: unknown) {
+  return post<{ data: WorkflowImportPreview }>(`/api/v1/agents/${id}/workflow/import/preview`, { document });
+}
+
+/** 在编辑器内基于当前草稿快照发起一次 debug run。 */
+export function startWorkflowDebugRun(
+  id: string,
+  expectedRevision: number,
+  input: WorkflowDebugInput,
+  idempotencyKey?: string,
+) {
+  return post<{ data: WorkflowRun }>(`/api/v1/agents/${id}/workflow/debug-runs`, {
+    expected_revision: expectedRevision,
+    input,
+    ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+  });
+}
+
+/** 请求取消一条工作流运行。 */
+export function cancelWorkflowRun(id: string, runId: string) {
+  return post<{ data: { run: WorkflowRun; cancel_requested: boolean } }>(
+    `/api/v1/agents/${id}/workflow/runs/${runId}/cancel`,
+    {},
+  );
+}
+
+/** 使用原运行快照进行整次重跑。 */
+export function retryWorkflowRun(id: string, runId: string) {
+  return post<{ data: WorkflowRun }>(`/api/v1/agents/${id}/workflow/runs/${runId}/retry`, {});
+}
+
+/** 从指定失败节点的检查点继续运行。 */
+export function retryWorkflowNode(id: string, runId: string, nodeRunId: number) {
+  return post<{ data: WorkflowRun }>(
+    `/api/v1/agents/${id}/workflow/runs/${runId}/nodes/${nodeRunId}/retry`,
+    {},
+  );
+}
+
+// 获取工作流运行列表（游标分页）
+export function listWorkflowRuns(id: string, params?: ListWorkflowRunsParams) {
+  const query = new URLSearchParams();
+  if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.status) query.set('status', params.status);
+  if (params?.started_after) query.set('started_after', params.started_after);
+  if (params?.started_before) query.set('started_before', params.started_before);
+  if (params?.before_started_at) query.set('before_started_at', params.before_started_at);
+  if (params?.before_id) query.set('before_id', params.before_id);
+  const qs = query.toString();
+  return get<{ data: WorkflowRunListResponse }>(
+    `/api/v1/agents/${id}/workflow/runs${qs ? '?' + qs : ''}`,
+  );
+}
+
+// 获取工作流运行详情，含当次定义快照与节点执行记录
+export function getWorkflowRun(id: string, runId: string) {
+  return get<{ data: WorkflowRun }>(`/api/v1/agents/${id}/workflow/runs/${runId}`);
+}
+
+/** 后端 409 修订冲突时 error.details 的结构；请求层已把 error 对象原样抛出。 */
+export interface WorkflowRevisionConflictDetails {
+  current_revision?: number;
 }

@@ -402,7 +402,7 @@ const workflowRunningNodeName = computed(() => {
     const latest = findLatestAssistantStream();
     if (!latest || !workflowActiveNodeId.value) return '';
     const event = latest.find(
-        (e) => e.type === 'tool_call' && e.tool_call_id === workflowActiveNodeId.value && e.node_name,
+        (e) => e?.pending && resolveWorkflowNodeId(e) === workflowActiveNodeId.value && e.node_name,
     );
     return event?.node_name || '';
 });
@@ -432,29 +432,49 @@ const findLatestAssistantStream = () => {
     return null;
 };
 
-/** 从 agentEventStream 提取当前正在 pending 的工作流 tool_call_id */
+/**
+ * 解析工作流 tool_call 事件里的真实节点 ID。
+ *
+ * tool_call_id 是后端为每次调用随机生成的 UUID（`workflow-<uuid>`），与节点无关；
+ * 节点 ID 只存在于 tool_name 中，形如 `workflow.<nodeID>`，因此必须从 tool_name 反解，
+ * 否则无法与 workflowDefinition.nodes 对应。
+ *
+ * WARN: 判据只用 tool_name 前缀，不读 event.is_workflow。is_workflow 是同一信息的第二份
+ * 副本，实时流与历史重建各写一处，双源一旦不同步就会让节点 ID 解析整体失效（历史上正是
+ * 如此：重建侧漏写该字段，导致刷新后所有工作流节点判不出来）。非工作流事件返回 null。
+ */
+const resolveWorkflowNodeId = (event) => {
+    if (event?.type !== 'tool_call') return null;
+    const toolName = event.tool_name;
+    if (typeof toolName !== 'string' || !toolName.startsWith('workflow.')) return null;
+    return toolName.slice('workflow.'.length) || null;
+};
+
+/** 从 agentEventStream 提取当前正在 pending 的工作流节点 ID */
 const extractActiveWorkflowNodeId = (stream) => {
     for (let i = stream.length - 1; i >= 0; i--) {
-        const e = stream[i];
-        if (e?.type === 'tool_call' && e.is_workflow && e.pending) {
-            return e.tool_call_id;
+        if (stream[i]?.pending) {
+            const nodeId = resolveWorkflowNodeId(stream[i]);
+            if (nodeId) return nodeId;
         }
     }
     return null;
 };
 
-/** 从 agentEventStream 提取已成功完成的工作流节点 ID 列表 */
+/** 从 agentEventStream 提取已成功完成的工作流节点 ID 列表（保持执行先后顺序） */
 const extractCompletedWorkflowNodeIds = (stream) => {
     return stream
-        .filter((e) => e?.type === 'tool_call' && e.is_workflow && !e.pending && e.success !== false)
-        .map((e) => e.tool_call_id);
+        .filter((e) => !e?.pending && e?.success !== false)
+        .map(resolveWorkflowNodeId)
+        .filter(Boolean);
 };
 
 /** 从 agentEventStream 提取执行失败的工作流节点 ID 列表 */
 const extractFailedWorkflowNodeIds = (stream) => {
     return stream
-        .filter((e) => e?.type === 'tool_call' && e.is_workflow && !e.pending && e.success === false)
-        .map((e) => e.tool_call_id);
+        .filter((e) => !e?.pending && e?.success === false)
+        .map(resolveWorkflowNodeId)
+        .filter(Boolean);
 };
 
 /** 切换工作流执行图面板 */

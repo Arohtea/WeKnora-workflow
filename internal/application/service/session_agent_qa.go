@@ -64,8 +64,40 @@ func (s *sessionService) AgentQA(
 
 	// Ensure defaults are set
 	req.CustomAgent.EnsureDefaults()
+	var publishedWorkflow *types.WorkflowVersionRecord
 	if req.CustomAgent.Config.AgentType == types.AgentTypeWorkflow {
-		if err := workflowruntime.NormalizeConfig(&req.CustomAgent.Config); err != nil {
+		// 正式聊天入口只能执行不可变发布快照。共享智能体场景下，查询版本时
+		// 使用智能体所属租户作为执行范围，但 WithExecutionTenant 不会改变
+		// CallerContextKey，因此不会绕过当前调用者的授权身份。
+		publishedTenantID := req.CustomAgent.TenantID
+		if publishedTenantID == 0 {
+			publishedTenantID = agentTenantID
+		}
+		publishedCtx := types.WithExecutionTenant(ctx, publishedTenantID)
+		var err error
+		publishedWorkflow, err = s.agentService.GetPublishedWorkflow(publishedCtx, req.CustomAgent.ID)
+		if err != nil {
+			return fmt.Errorf("workflow has not been published; publish it in the editor before running: %w", err)
+		}
+		_, publishedConfig, err := DecodeWorkflowVersionDefinition(publishedWorkflow)
+		if err != nil {
+			return fmt.Errorf("load published workflow version %d: %w", publishedWorkflow.Version, err)
+		}
+		publishedAgent := *req.CustomAgent
+		publishedAgent.Config = *publishedConfig
+		publishedAgent.EnsureDefaults()
+		if err := workflowruntime.ValidatePublishedConfig(&publishedAgent.Config); err != nil {
+			return fmt.Errorf("published workflow version %d is invalid: %w", publishedWorkflow.Version, err)
+		}
+		executionReq := *req
+		executionReq.CustomAgent = &publishedAgent
+		req = &executionReq
+		if publishedWorkflow.TenantID != 0 {
+			agentTenantID = publishedWorkflow.TenantID
+		}
+	}
+	if req.CustomAgent.Config.AgentType == types.AgentTypeWorkflow {
+		if err := workflowruntime.ValidatePublishedConfig(&req.CustomAgent.Config); err != nil {
 			return err
 		}
 	}
@@ -129,7 +161,7 @@ func (s *sessionService) AgentQA(
 		agentConfig.MaxContextTokens, effectiveModelID, modelContextWindow)
 
 	if types.IsWorkflowAgent(&req.CustomAgent.Config) {
-		return s.runWorkflowQA(ctx, req, agentConfig, summaryModel, eventBus)
+		return s.runWorkflowQA(ctx, req, agentConfig, summaryModel, eventBus, publishedWorkflow)
 	}
 
 	// Get rerank model from custom agent config only when knowledge_search can

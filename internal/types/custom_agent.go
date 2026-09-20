@@ -85,6 +85,11 @@ type CustomAgent struct {
 
 	// Agent configuration
 	Config CustomAgentConfig `yaml:"config" json:"config" gorm:"type:json"`
+	// DraftRevision is incremented for every workflow draft update. Clients send
+	// the revision they edited so concurrent saves cannot silently overwrite one another.
+	DraftRevision int64 `yaml:"draft_revision" json:"draft_revision" gorm:"not null;default:0"`
+	// PublishedVersion points at the immutable workflow version used by every runtime entry point.
+	PublishedVersion int64 `yaml:"published_version" json:"published_version" gorm:"not null;default:0"`
 
 	// Timestamps
 	CreatedAt time.Time      `yaml:"created_at" json:"created_at"`

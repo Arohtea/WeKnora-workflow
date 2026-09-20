@@ -372,11 +372,15 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
             const result = toolCall.result as ChatMessage | undefined
             const resultData = result?.data as ChatMessage | undefined
             const target = toolCall.target as ChatMessage | undefined
+            const toolName = target?.name || toolCall.name
             events.push({
               type: 'tool_call',
               tool_call_id: toolCall.id,
-              tool_name: target?.name || toolCall.name,
+              tool_name: toolName,
               arguments: target?.args || toolCall.args,
+              // 实时流由后端 dataPayload.is_workflow 标记；历史重建拿不到那个字段，
+              // 这里按 tool_name 的 `workflow.<nodeID>` 前缀还原，让两条路径的事件形状一致。
+              is_workflow: Boolean(toolName && String(toolName).startsWith('workflow.')),
               pending: false,
               success: result?.success !== false,
               output: result?.output || '',

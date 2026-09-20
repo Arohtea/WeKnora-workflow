@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // Worker-pool names are part of the runtime observability API. Each pool is
 // backed by an independent asynq.Server, so concurrency is hard-isolated
 // between pools instead of being only a weighted dequeue preference.
@@ -10,6 +12,7 @@ const (
 	WorkerPoolMaintenance = "maintenance"
 	WorkerPoolShared      = "shared"
 	WorkerPoolWiki        = "wiki"
+	WorkerPoolWorkflow    = "workflow"
 
 	// Upstream defaults are explicit guarantees plus an elastic pool. The
 	// shared pool may consume core and enrichment queues, so idle capacity in
@@ -20,6 +23,7 @@ const (
 	DefaultMaintenanceWorkerConcurrency = 4
 	DefaultSharedWorkerConcurrency      = 6
 	DefaultWikiWorkerConcurrency        = 8
+	DefaultWorkflowWorkerConcurrency    = 8
 	DefaultUpstreamWorkerConcurrency    = DefaultCoreWorkerConcurrency +
 		DefaultPostProcessWorkerConcurrency + DefaultEnrichmentWorkerConcurrency +
 		DefaultMaintenanceWorkerConcurrency + DefaultSharedWorkerConcurrency
@@ -42,6 +46,9 @@ const (
 	QueueSync           = "sync"
 	QueueMaintenance    = "low"
 	QueueWiki           = "wiki"
+	// QueueWorkflow 只承载工作流单节点执行唤醒任务。真实待办与检查点保存在数据库，
+	// 因此 Redis 丢任务或服务重启不会丢失运行状态。
+	QueueWorkflow = "workflow"
 	// QueueMemory carries debounced long-term memory distillation. It sits in
 	// the enrichment pool because it is a background LLM call whose latency
 	// nobody is waiting on.
@@ -85,6 +92,7 @@ var queueDefinitions = []QueueDefinition{
 		TypeKnowledgeListDelete, TypeKnowledgeListReparse, TypeKnowledgeMove,
 	}},
 	{Name: QueueWiki, Pool: WorkerPoolWiki, Weight: 1, TaskTypes: []string{TypeWikiIngest, TypeWikiFinalize}},
+	{Name: QueueWorkflow, Pool: WorkerPoolWorkflow, Weight: 1, TaskTypes: []string{TypeWorkflowNodeExecute}},
 }
 
 // QueueDefinitions returns a copy so callers cannot mutate global topology.
@@ -146,6 +154,7 @@ type WorkerPoolConcurrency struct {
 	Maintenance int
 	Shared      int
 	Wiki        int
+	Workflow    int
 }
 
 func DefaultWorkerPoolConcurrency() WorkerPoolConcurrency {
@@ -156,6 +165,7 @@ func DefaultWorkerPoolConcurrency() WorkerPoolConcurrency {
 		Maintenance: DefaultMaintenanceWorkerConcurrency,
 		Shared:      DefaultSharedWorkerConcurrency,
 		Wiki:        DefaultWikiWorkerConcurrency,
+		Workflow:    DefaultWorkflowWorkerConcurrency,
 	}
 }
 
@@ -181,6 +191,7 @@ func ResolveWorkerPoolConcurrency(read func(key, env string, fallback int) int) 
 	allocation.Maintenance = positive("asynq.maintenance_concurrency", "WEKNORA_ASYNQ_MAINTENANCE_CONCURRENCY", allocation.Maintenance)
 	allocation.Shared = positive("asynq.shared_concurrency", "WEKNORA_ASYNQ_SHARED_CONCURRENCY", allocation.Shared)
 	allocation.Wiki = positive("asynq.wiki_concurrency", "WEKNORA_WIKI_ASYNQ_CONCURRENCY", allocation.Wiki)
+	allocation.Workflow = positive("asynq.workflow_concurrency", "WEKNORA_WORKFLOW_ASYNQ_CONCURRENCY", allocation.Workflow)
 	return allocation
 }
 
@@ -251,10 +262,36 @@ const (
 	TypeDataSourceSync           = "datasource:sync"            // 数据源同步任务
 	TypeWikiIngest               = "wiki:ingest"                // Wiki 页面同步任务
 	TypeWikiFinalize             = "wiki:finalize"              // Wiki KB 级收尾任务（防抖：索引重建/死链清理/交叉链接）
+	TypeWorkflowNodeExecute      = "workflow:node_execute"      // 工作流单节点持久化执行唤醒任务
 	TypeTemporaryDocumentProcess = "temporary_document:process" // 会话临时文档解析任务
 	// TypeMemoryExtract 长期记忆抽取任务（会话轮次防抖后异步执行）
 	TypeMemoryExtract = "memory:extract"
 )
+
+// WorkflowNodeTaskPayload 是工作流 worker 的轻量唤醒载荷。
+//
+// 节点、变量和重试状态均以 task_pending_ops 与工作流运行表为准，载荷只携带
+// 租户和运行 ID，避免 Redis/进程内队列成为执行状态的第二事实来源。
+type WorkflowNodeTaskPayload struct {
+	TracingContext
+	TenantID  uint64        `json:"tenant_id"`
+	AgentID   string        `json:"agent_id"`
+	RunID     string        `json:"run_id"`
+	Initiator TaskInitiator `json:"initiator,omitempty"`
+}
+
+// WorkflowPendingNodePayload 是 task_pending_ops 中单个节点待办的持久化载荷。
+//
+// 分支检查点保存完整变量树；该载荷只描述下一次要执行的节点和尝试关系。
+// NotBefore 用于自动重试退避，worker 在时间未到时会释放 claim 并重建延迟唤醒。
+type WorkflowPendingNodePayload struct {
+	BranchID  string        `json:"branch_id"`
+	NodeID    string        `json:"node_id"`
+	Attempt   int           `json:"attempt"`
+	RetryOf   int64         `json:"retry_of,omitempty"`
+	NotBefore *time.Time    `json:"not_before,omitempty"`
+	Initiator TaskInitiator `json:"initiator,omitempty"`
+}
 
 // MemoryExtractPayload carries everything the background distillation task
 // needs. Scope (tenant + subject) travels in the payload rather than being

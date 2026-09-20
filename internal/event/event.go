@@ -87,6 +87,15 @@ const (
 	// Session events
 	EventSessionTitle EventType = "session_title" // 会话标题更新
 
+	// 工作流轨迹事件：与合成 tool_call 不同，这些事件是轨迹状态的权威来源，
+	// 前端按 run_id + sequence 重建节点时间线，不需要从工具调用里反推。
+	EventWorkflowRunStarted    EventType = "workflow_run.started"
+	EventWorkflowRunCompleted  EventType = "workflow_run.completed"
+	EventWorkflowNodeStarted   EventType = "workflow_node.started"
+	EventWorkflowNodeCompleted EventType = "workflow_node.completed"
+	EventWorkflowNodeFailed    EventType = "workflow_node.failed"
+	EventWorkflowNodeCanceled  EventType = "workflow_node.canceled"
+
 	// Control events
 	EventStop EventType = "stop" // 停止对话生成
 )

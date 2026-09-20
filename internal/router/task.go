@@ -34,6 +34,7 @@ type AsynqTaskParams struct {
 	MaintenanceServer    *asynq.Server `name:"maintenanceAsynqServer"`
 	SharedServer         *asynq.Server `name:"sharedAsynqServer"`
 	WikiServer           *asynq.Server `name:"wikiAsynqServer"`
+	WorkflowServer       *asynq.Server `name:"workflowAsynqServer"`
 	KnowledgeService     interfaces.KnowledgeService
 	KnowledgeBaseService interfaces.KnowledgeBaseService
 	TagService           interfaces.KnowledgeTagService
@@ -44,6 +45,7 @@ type AsynqTaskParams struct {
 	KnowledgePostProcess interfaces.TaskHandler `name:"knowledgePostProcess"`
 	KnowledgeAutoTag     interfaces.TaskHandler `name:"knowledgeAutoTag"`
 	WikiIngest           interfaces.TaskHandler `name:"wikiIngest"`
+	WorkflowNodeTask     interfaces.TaskHandler `name:"workflowNodeTask"`
 	TemporaryDocument    interfaces.TemporaryDocumentService
 	MemoryService        interfaces.MemoryService
 	DeadLetterRepo       interfaces.TaskDeadLetterRepository
@@ -225,6 +227,17 @@ func NewWikiAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
 	return newAsynqServer(concurrency, types.QueueWeightsForPool(types.WorkerPoolWiki))
 }
 
+// NewWorkflowAsynqServer 为工作流单节点执行提供独立并发池。
+//
+// 工作流节点可能长时间调用模型或外部工具，必须与文档处理和知识库后台任务
+// 隔离；Asynq 只负责唤醒，节点状态仍由数据库状态机持久化。
+func NewWorkflowAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	allocation := resolveWorkerPoolConcurrency(svc)
+	log.Printf("asynq workflow-pool server starting with concurrency=%d total_upstream=%d",
+		allocation.Workflow, allocation.UpstreamTotal())
+	return newAsynqServer(allocation.Workflow, types.QueueWeightsForPool(types.WorkerPoolWorkflow))
+}
+
 func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Create a new mux and register all handlers
 	mux := asynq.NewServeMux()
@@ -316,6 +329,11 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Register long-term memory distillation handler
 	mux.HandleFunc(types.TypeMemoryExtract, params.MemoryService.Handle)
 
+	// Register the durable workflow node handler. One wake task executes at most
+	// one database-backed node attempt; follow-up nodes are scheduled only after
+	// the checkpoint transaction commits.
+	mux.HandleFunc(types.TypeWorkflowNodeExecute, params.WorkflowNodeTask.Handle)
+
 	// Run the same mux on every pool. Shared and dedicated servers intentionally
 	// overlap, but Redis dequeue is atomic, so each task still executes once.
 	runPool := func(name string, srv *asynq.Server) {
@@ -331,6 +349,7 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	runPool("maintenance-pool", params.MaintenanceServer)
 	runPool("shared-pool", params.SharedServer)
 	runPool("wiki-pool", params.WikiServer)
+	runPool("workflow-pool", params.WorkflowServer)
 	return mux
 }
 

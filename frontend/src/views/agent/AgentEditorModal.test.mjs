@@ -5,10 +5,9 @@ import test from 'node:test'
 const source = readFileSync(new URL('./AgentEditorModal.vue', import.meta.url), 'utf8')
 
 test('editing an agent closes the editor after a successful save', () => {
-  assert.match(
-    source,
-    /await updateAgent\(formData\.value\.id, payload\);\s*MessagePlugin\.success\(t\('agent\.messages\.updated'\)\);\s*emit\('success'\);\s*handleClose\(\);/
-  )
+  assert.match(source, /await updateAgent\(formData\.value\.id, payload\);/)
+  assert.match(source, /MessagePlugin\.success\(isWorkflow\.value \?[^\n]*t\('agent\.messages\.updated'\)/)
+  assert.match(source, /emit\('success'\);\s*handleClose\(\);/)
 })
 
 test('the first successful create stays open for integration setup', () => {
@@ -119,8 +118,8 @@ test('skills and sandbox share one editor section', () => {
   const capabilityGroup = source.match(/pickItems\(\['multimodal', 'tools', 'mcp', 'skills'\]\)/)
   assert.ok(capabilityGroup, 'expected the capability group to list skills without a separate sandbox tab')
 
-  assert.match(source, /v-show="currentSection === 'skills' && isAgentMode"/)
-  assert.doesNotMatch(source, /currentSection === 'sandbox' && isAgentMode/)
+  assert.match(source, /v-show="currentSection === 'skills' && \(isAgentMode \|\| isWorkflow\)"/)
+  assert.doesNotMatch(source, /currentSection === 'sandbox' && \(isAgentMode \|\| isWorkflow\)/)
   assert.match(source, /sandbox: 'skills'/)
   assert.match(source, /formData\.config\.sandbox_config_id/)
   assert.match(source, /:disabled="!canEnableSkills"/)

@@ -19,10 +19,11 @@ import (
 
 // Custom agent related errors
 var (
-	ErrAgentNotFound       = errors.New("agent not found")
-	ErrCannotModifyBuiltin = errors.New("cannot modify built-in agent basic info")
-	ErrCannotDeleteBuiltin = errors.New("cannot delete built-in agent")
-	ErrAgentNameRequired   = errors.New("agent name is required")
+	ErrAgentNotFound            = errors.New("agent not found")
+	ErrCannotModifyBuiltin      = errors.New("cannot modify built-in agent basic info")
+	ErrCannotDeleteBuiltin      = errors.New("cannot delete built-in agent")
+	ErrAgentNameRequired        = errors.New("agent name is required")
+	ErrWorkflowRevisionConflict = repository.ErrWorkflowRevisionConflict
 )
 
 const (
@@ -109,8 +110,11 @@ func (s *customAgentService) CreateAgent(ctx context.Context, agent *types.Custo
 
 	// Set defaults
 	agent.EnsureDefaults()
-	if err := workflowruntime.NormalizeConfig(&agent.Config); err != nil {
+	if err := workflowruntime.NormalizeDraftConfig(&agent.Config); err != nil {
 		return nil, err
+	}
+	if agent.Config.AgentType == types.AgentTypeWorkflow && agent.DraftRevision <= 0 {
+		agent.DraftRevision = 1
 	}
 	if err := agent.Config.QuestionSuggestions.Validate(); err != nil {
 		return nil, err
@@ -129,6 +133,74 @@ func (s *customAgentService) CreateAgent(ctx context.Context, agent *types.Custo
 
 	logger.Infof(ctx, "Custom agent created successfully, ID: %s, name: %s", agent.ID, agent.Name)
 	return agent, nil
+}
+
+type workflowDraftSaver interface {
+	SaveWorkflowDraft(context.Context, uint64, string, int64, *types.CustomAgent) error
+}
+
+// UpdateWorkflowDraft 以客户端提供的草稿修订号保存工作流，避免并发编辑静默覆盖。
+//
+// @param ctx 当前请求上下文。
+// @param agentID 工作流智能体 ID。
+// @param patch 包含名称、描述和可选头像的编辑内容。
+// @param config 新的工作流配置。
+// @param expectedRevision 客户端读取到的草稿修订号。
+// @returns 更新后的智能体；修订号过期时返回 ErrWorkflowRevisionConflict。
+func (s *customAgentService) UpdateWorkflowDraft(
+	ctx context.Context,
+	agentID string,
+	patch *types.CustomAgent,
+	config *types.CustomAgentConfig,
+	expectedRevision int64,
+) (*types.CustomAgent, error) {
+	tenantID, ok := types.TenantIDFromContext(ctx)
+	if !ok {
+		return nil, ErrInvalidTenantID
+	}
+	if patch == nil || config == nil {
+		return nil, errors.New("workflow draft payload is required")
+	}
+	existing, err := s.repo.GetAgentByID(ctx, agentID, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrCustomAgentNotFound) {
+			return nil, ErrAgentNotFound
+		}
+		return nil, err
+	}
+	if existing.IsBuiltin {
+		return nil, ErrCannotModifyBuiltin
+	}
+	if existing.Config.AgentType != types.AgentTypeWorkflow || config.AgentType != types.AgentTypeWorkflow {
+		return nil, errors.New("agent is not a workflow agent")
+	}
+	if strings.TrimSpace(patch.Name) == "" {
+		return nil, ErrAgentNameRequired
+	}
+	working := *existing
+	working.Name = patch.Name
+	working.Description = patch.Description
+	if patch.Avatar != "" || existing.Avatar == "" {
+		working.Avatar = patch.Avatar
+	}
+	working.Config = *config
+	working.EnsureDefaults()
+	if err := workflowruntime.NormalizeDraftConfig(&working.Config); err != nil {
+		return nil, err
+	}
+	if err := working.Config.QuestionSuggestions.Validate(); err != nil {
+		return nil, err
+	}
+	saver, ok := s.repo.(workflowDraftSaver)
+	if !ok {
+		return nil, errors.New("workflow draft persistence is unavailable")
+	}
+	if err := saver.SaveWorkflowDraft(ctx, tenantID, agentID, expectedRevision, &working); err != nil {
+		return nil, err
+	}
+	working.DraftRevision = expectedRevision + 1
+	working.UpdatedAt = time.Now()
+	return &working, nil
 }
 
 // GetAgentByID retrieves an agent by its ID (including built-in agents)
@@ -401,6 +473,10 @@ func (s *customAgentService) updateBuiltinAgent(ctx context.Context, agent *type
 	newAgent.EnsureDefaults()
 	if err := workflowruntime.NormalizeConfig(&newAgent.Config); err != nil {
 		return nil, err
+	}
+	if newAgent.Config.AgentType == types.AgentTypeWorkflow {
+		newAgent.DraftRevision = 1
+		newAgent.PublishedVersion = 0
 	}
 	if err := newAgent.Config.QuestionSuggestions.Validate(); err != nil {
 		return nil, err

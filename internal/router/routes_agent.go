@@ -40,6 +40,23 @@ func RegisterCustomAgentRoutes(r *gin.RouterGroup, agentHandler *handler.CustomA
 		agentsRead.GET("", g.Viewer(), agentHandler.ListAgents)
 		// Workflow resource catalog — Viewer+. Must precede /:id.
 		agentsRead.GET("/:id/workflow/catalog", g.Viewer(), agentHandler.GetWorkflowCatalog)
+		// Workflow publish history — Viewer+（只读）。必须先于 /:id 注册。
+		agentsRead.GET("/:id/workflow/versions", g.Viewer(), agentHandler.ListWorkflowVersions)
+		agentsRead.GET("/:id/workflow/versions/:version", g.Viewer(), agentHandler.GetWorkflowVersion)
+		// Workflow static validation of an unsaved draft — Viewer+（校验不落库）。
+		agentsRead.POST("/:id/workflow/validate", g.Viewer(), agentHandler.ValidateWorkflowDefinition)
+		// Workflow run audit list / detail — Viewer+（沿用智能体查看权限）。
+		agentsRead.GET("/:id/workflow/runs", g.Viewer(), agentHandler.GetWorkflowRuns)
+		agentsRead.GET("/:id/workflow/runs/:run_id", g.Viewer(), agentHandler.GetWorkflowRun)
+		agentsRead.GET("/:id/workflow/runs/:run_id/stream", g.Viewer(), agentHandler.StreamWorkflowRun)
+		// Publish a workflow version — 发布等同修改智能体，走写权限 + owner 矩阵。
+		agentsWrite.POST("/:id/workflow/publish", g.OwnedAgentOrAdmin(), agentHandler.PublishWorkflow)
+		agentsWrite.POST("/:id/workflow/versions/:version/restore", g.OwnedAgentOrAdmin(), agentHandler.RestoreWorkflowVersion)
+		agentsWrite.POST("/:id/workflow/import/preview", g.OwnedAgentOrAdmin(), agentHandler.PreviewWorkflowImport)
+		agentsWrite.POST("/:id/workflow/debug-runs", g.OwnedAgentOrAdmin(), agentHandler.StartWorkflowDebugRun)
+		agentsWrite.POST("/:id/workflow/runs/:run_id/retry", g.OwnedAgentOrAdmin(), agentHandler.RetryWorkflowRun)
+		agentsWrite.POST("/:id/workflow/runs/:run_id/nodes/:node_run_id/retry", g.OwnedAgentOrAdmin(), agentHandler.RetryWorkflowNode)
+		agentsWrite.POST("/:id/workflow/runs/:run_id/cancel", g.OwnedAgentOrAdmin(), agentHandler.CancelWorkflowRun)
 		// Get agent by ID — Viewer+
 		agentsRead.GET("/:id", g.Viewer(), agentHandler.GetAgent)
 		// Update agent — creator OR Admin+

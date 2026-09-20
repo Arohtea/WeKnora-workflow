@@ -3606,6 +3606,10 @@ export default {
     referencesWebCount: '{count}개 웹 결과 참조',
     referencesDocAndWebCount: '{docCount}개 문서와 {webCount}개 웹페이지 참조',
     referencesDrawerTitle: '참고 출처',
+    workflowGraph: '실행 그래프',
+    expandWorkflowGraph: '실행 그래프 펼치기',
+    collapseWorkflowGraph: '실행 그래프 접기',
+    workflowRunning: '워크플로 실행 중',
     referencesDrawerTitleWeb: '웹 출처',
     referencesDrawerTitleDocs: '문서 출처',
     referencesDrawerTitleTools: '도구 결과',
@@ -7197,10 +7201,36 @@ export default {
     title: '워크플로',
     subtitle: '「자료 검색, 판단, 답변」 등의 고정 단계를 규격화하여 안정적인 실행을 보장합니다',
     createWorkflow: '워크플로 생성',
+    importWorkflow: '워크플로 가져오기',
+    exportWorkflow: '워크플로 내보내기',
+    workflowNode: '워크플로 노드',
+    nodeOutput: '노드 출력',
+    workflowGraph: '워크플로 그래프',
+    liveTrace: '실행 추적',
+    nodeType: {
+      start: '시작 노드',
+      end: '종료 노드',
+      llm: 'LLM 처리',
+      'llm-decision': '라우팅 판단',
+      'knowledge-retrieval': '지식 검색',
+      'http-request': 'HTTP 요청',
+      tool: '도구 호출',
+    },
     messages: {
       created: '워크플로가 생성되었습니다',
+      updated: '워크플로가 수정되었습니다',
       deleted: '워크플로가 삭제되었습니다',
       deleteFailed: '워크플로 삭제 실패',
+      saveFailed: '워크플로 저장 실패',
+      nameRequired: '워크플로 이름을 입력하세요',
+      importSuccess: '워크플로를 가져왔습니다',
+      importFailed: '워크플로 가져오기 실패',
+      exportSuccess: '워크플로를 내보냈습니다',
+      exportFailed: '워크플로 내보내기 실패',
+    },
+    confirm: {
+      importOverwriteTitle: '워크플로 가져오기 확인',
+      importOverwrite: '새 워크플로를 가져오면 현재 캔버스의 모든 노드와 연결이 교체됩니다. 계속하시겠습니까?',
     },
     delete: {
       confirmTitle: '워크플로 삭제',
@@ -7222,4 +7252,3 @@ export default {
     },
   }
 }
-

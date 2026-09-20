@@ -3606,6 +3606,10 @@ export default {
     referencesWebCount: 'Использовано {count} веб-результат(ов)',
     referencesDocAndWebCount: 'Использовано {docCount} документ(ов) и {webCount} веб-страниц(ы)',
     referencesDrawerTitle: 'Источники',
+    workflowGraph: 'Граф выполнения',
+    expandWorkflowGraph: 'Развернуть граф выполнения',
+    collapseWorkflowGraph: 'Свернуть граф выполнения',
+    workflowRunning: 'Рабочий процесс выполняется',
     referencesDrawerTitleWeb: 'Веб-источники',
     referencesDrawerTitleDocs: 'Документы',
     referencesDrawerTitleTools: 'Результаты инструментов',
@@ -7197,10 +7201,36 @@ export default {
     title: 'Рабочие процессы',
     subtitle: 'Стандартизируйте многошаговые сценарии для получения детерминированных результатов',
     createWorkflow: 'Создать процесс',
+    importWorkflow: 'Импортировать процесс',
+    exportWorkflow: 'Экспортировать процесс',
+    workflowNode: 'Узел процесса',
+    nodeOutput: 'Вывод узла',
+    workflowGraph: 'Граф процесса',
+    liveTrace: 'Трассировка выполнения',
+    nodeType: {
+      start: 'Стартовый узел',
+      end: 'Конечный узел',
+      llm: 'Обработка LLM',
+      'llm-decision': 'Маршрутизация',
+      'knowledge-retrieval': 'Поиск в базе знаний',
+      'http-request': 'HTTP-запрос',
+      tool: 'Вызов инструмента',
+    },
     messages: {
       created: 'Рабочий процесс успешно создан',
+      updated: 'Рабочий процесс обновлен',
       deleted: 'Рабочий процесс удален',
       deleteFailed: 'Не удалось удалить рабочий процесс',
+      saveFailed: 'Не удалось сохранить рабочий процесс',
+      nameRequired: 'Введите название рабочего процесса',
+      importSuccess: 'Рабочий процесс импортирован',
+      importFailed: 'Не удалось импортировать рабочий процесс',
+      exportSuccess: 'Рабочий процесс экспортирован',
+      exportFailed: 'Не удалось экспортировать рабочий процесс',
+    },
+    confirm: {
+      importOverwriteTitle: 'Подтвердите импорт рабочего процесса',
+      importOverwrite: 'Импорт нового процесса заменит все узлы и связи на текущем холсте. Продолжить?',
     },
     delete: {
       confirmTitle: 'Удалить рабочий процесс',
@@ -7222,4 +7252,3 @@ export default {
     },
   }
 }
-

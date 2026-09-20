@@ -10,6 +10,7 @@ export interface WorkflowExportPackage {
     name: string;
     description?: string;
     version?: number;
+    schema_version: number;
   };
   workflow: WorkflowDefinition;
 }
@@ -74,10 +75,12 @@ export function exportWorkflowPackage(options: {
     metadata: {
       name: name.trim() || '工作流',
       description: description.trim(),
-      version: workflow.version || 1,
+      version: 2,
+      schema_version: 2,
     },
     workflow: {
-      version: workflow.version || 1,
+      version: 2,
+      schema_version: 2,
       nodes: workflow.nodes || [],
       edges: workflow.edges || [],
       viewport: workflow.viewport || { x: 0, y: 0, zoom: 1 },
@@ -211,6 +214,14 @@ export function parseWorkflowJSON(rawText: string): WorkflowParseResult {
   const nodeMap = new Map<string, WorkflowNode>();
   let startCount = 0;
   let endCount = 0;
+  const schemaVersion = Number(workflowCandidate.schema_version || workflowCandidate.version || 1);
+  const isLegacySchema = !Number.isFinite(schemaVersion) || schemaVersion < 2;
+  const outgoingCount = new Map<string, number>();
+  for (const edge of workflowCandidate.edges) {
+    if (edge && typeof edge.source === 'string') {
+      outgoingCount.set(edge.source, (outgoingCount.get(edge.source) || 0) + 1);
+    }
+  }
 
   for (let i = 0; i < workflowCandidate.nodes.length; i++) {
     const node = workflowCandidate.nodes[i];
@@ -240,11 +251,17 @@ export function parseWorkflowJSON(rawText: string): WorkflowParseResult {
       x: Number(node.position?.x) || 100 + i * 180,
       y: Number(node.position?.y) || 200,
     };
+    const branchMode = node.branch_mode === 'all_match' || node.branch_mode === 'first_match'
+      ? node.branch_mode
+      : isLegacySchema && (outgoingCount.get(String(node.id)) || 0) > 1
+        ? 'all_match'
+        : 'first_match';
 
     const normalizedNode: WorkflowNode = {
       id: String(node.id),
       type: node.type,
       name: node.name || (node.type === 'start' ? '开始' : node.type === 'end' ? '结束' : '未命名节点'),
+      branch_mode: branchMode,
       position: normalizedPosition,
       config: typeof node.config === 'object' && node.config !== null ? node.config : {},
     };
@@ -262,6 +279,7 @@ export function parseWorkflowJSON(rawText: string): WorkflowParseResult {
 
   const normalizedEdges: WorkflowEdge[] = [];
   const edgeIdSet = new Set<string>();
+  const orderBySource = new Map<string, number>();
 
   for (let j = 0; j < workflowCandidate.edges.length; j++) {
     const edge = workflowCandidate.edges[j];
@@ -291,20 +309,26 @@ export function parseWorkflowJSON(rawText: string): WorkflowParseResult {
       return { success: false, error: `连线“${edgeId}”指向自身，不允许自环连线` };
     }
 
+    const sourceOrder = orderBySource.get(edge.source) || 0;
+    const hasExplicitOrder = edge.order !== undefined && edge.order !== null && edge.order !== '' && Number.isFinite(Number(edge.order));
+    const order = isLegacySchema || !hasExplicitOrder ? sourceOrder : Number(edge.order);
+    orderBySource.set(edge.source, sourceOrder + 1);
+
     normalizedEdges.push({
       id: edgeId,
       source: edge.source,
       target: edge.target,
       source_handle: edge.source_handle || edge.sourceHandle || undefined,
       target_handle: edge.target_handle || edge.targetHandle || undefined,
-      order: Number(edge.order) || 0,
+      order,
       is_default: Boolean(edge.is_default ?? edge.data?.is_default ?? false),
       condition: edge.condition || edge.data?.condition || undefined,
     });
   }
 
   const normalizedWorkflow: WorkflowDefinition = {
-    version: Number(workflowCandidate.version) || 1,
+    version: 2,
+    schema_version: 2,
     nodes: Array.from(nodeMap.values()),
     edges: normalizedEdges,
     viewport: {

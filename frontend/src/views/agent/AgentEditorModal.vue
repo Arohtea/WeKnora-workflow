@@ -212,13 +212,20 @@
                     :catalog="workflowCatalog"
                     :knowledge-base-options="kbOptions"
                     :sandbox-config-id="formData.config.sandbox_config_id"
+                    :agent-id="editorAgent?.id || formData.id"
+                    :draft-revision="workflowDraftRevision"
+                    :published-version="workflowPublishedVersion"
+                    :published-draft-revision="workflowPublishedDraftRevision"
                     :disabled="isBuiltinAgent || props.readOnly"
+                    :save-draft="saveWorkflowDraft"
                     @validation-error="workflowValidationMessage = $event"
                     @select-sandbox="openWorkflowSandboxSelection"
                     @manage-skills="openSkillSettings"
                     @manage-knowledge-bases="openWorkflowKnowledgeBaseSelection"
                     @manage-mcp="openWorkflowMcpSettings"
                     @run="handleWorkflowRun"
+                    @published="handleWorkflowPublished"
+                    @reload="reloadWorkflowAgent"
                   />
                   <p v-if="workflowCatalogError" class="workflow-catalog-error">
                     {{ workflowCatalogError }}
@@ -1900,7 +1907,9 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import { createSessions } from '@/api/chat';
 import {
   createAgent,
+  getAgentById,
   getWorkflowCatalog,
+  listWorkflowVersions,
   updateAgent,
   listIMChannels,
   type CustomAgent,
@@ -2117,6 +2126,9 @@ onBeforeUnmount(() => {
 })
 
 const saving = ref(false);
+const workflowDraftRevision = ref(0);
+const workflowPublishedVersion = ref(0);
+const workflowPublishedDraftRevision = ref(0);
 const workflowRunLoading = ref(false);
 const editorInitializing = ref(false);
 const allModels = ref<ModelConfig[]>([]);
@@ -2129,8 +2141,10 @@ const workflowValidationMessage = ref('');
 /** WorkflowEditor 通过 defineExpose 暴露给父组件的能力。 */
 interface WorkflowEditorHandle {
   validate: () => boolean;
+  validateDraftSyntax: () => boolean;
   isUntouched: () => boolean;
   isTemplateGalleryOpen: () => boolean;
+  openDebugRun: () => void;
 }
 
 // 只有"新建工作流"才走首次引导：编辑已有工作流的人已经知道这块怎么用了。
@@ -2967,7 +2981,8 @@ const defaultFormData = {
 };
 
 const createDefaultWorkflowDefinition = (): WorkflowDefinition => ({
-  version: 1,
+  version: 2,
+  schema_version: 2,
   nodes: [
     { id: 'start', type: 'start', name: '开始', position: { x: 80, y: 160 }, config: {} },
     { id: 'end', type: 'end', name: '结束', position: { x: 420, y: 160 }, config: { text_template: '{{input.query}}' } },
@@ -3641,6 +3656,9 @@ watch(() => props.visible, async (val) => {
       isInitializing.value = true;
       agentData.config = hydrateAgentPromptRefs(agentData.config, promptTemplates.value);
       formData.value = agentData;
+      workflowDraftRevision.value = Number(agentData.draft_revision || 0);
+      workflowPublishedVersion.value = Number(agentData.published_version || 0);
+      workflowPublishedDraftRevision.value = 0;
       if (agentData.config.agent_type === 'workflow' && !agentData.config.workflow) {
         agentData.config.workflow = createDefaultWorkflowDefinition();
       }
@@ -3658,6 +3676,9 @@ watch(() => props.visible, async (val) => {
       // Display inherited defaults for all agents without persisting a copy.
       fillBuiltinAgentDefaults();
       void loadAgentIntegrationCounts(agentData.id);
+      if (agentData.config.agent_type === 'workflow') {
+        void refreshWorkflowPublishState(agentData.id);
+      }
     } else {
       // 创建新智能体，使用系统默认值
       const newFormData = JSON.parse(JSON.stringify(defaultFormData));
@@ -5091,7 +5112,6 @@ const handleRewriteTemplateSelect = (template: PromptTemplate) => {
 const handleFallbackResponseTemplateSelect = (template: PromptTemplate) => {
   formData.value.config.fallback_response = template.content;
 };
-
 const handleFallbackPromptTemplateSelect = (template: PromptTemplate) => {
   formData.value.config.fallback_prompt = template.content;
 };
@@ -5102,21 +5122,75 @@ const hasPlaceholder = (text: string | undefined, placeholder: string): boolean 
   return text.includes(`{{${placeholder}}}`);
 };
 
+async function refreshWorkflowPublishState(agentId: string) {
+  try {
+    const result = await listWorkflowVersions(agentId);
+    const latest = result?.data?.[0];
+    if (latest) {
+      workflowPublishedVersion.value = Number(latest.version || 0);
+      workflowPublishedDraftRevision.value = Number(latest.draft_revision || 0);
+    }
+  } catch {
+    // 发布状态读取失败不阻塞编辑器，下一次打开仍会重新读取。
+  }
+}
+async function saveWorkflowDraft(): Promise<number | null> {
+  const agentId = formData.value.id || editorAgent.value?.id;
+  if (!agentId) return null;
+  const payload = {
+    name: formData.value.name,
+    description: formData.value.description,
+    config: serializeAgentPrompts(formData.value.config, promptTemplates.value),
+    expected_revision: workflowDraftRevision.value,
+  };
+  const result = await updateAgent(agentId, payload);
+  const updated = result?.data;
+  const revision = Number(updated?.draft_revision ?? workflowDraftRevision.value + 1);
+  formData.value.id = agentId;
+  workflowDraftRevision.value = revision;
+  if (updated?.published_version != null) {
+    workflowPublishedVersion.value = Number(updated.published_version);
+  }
+  return revision;
+}
+function handleWorkflowPublished(payload: { version: number; draftRevision: number }) {
+  workflowPublishedVersion.value = payload.version;
+  workflowPublishedDraftRevision.value = payload.draftRevision;
+  workflowDraftRevision.value = payload.draftRevision;
+}
+async function reloadWorkflowAgent() {
+  const agentId = editorAgent.value?.id || formData.value.id;
+  if (!agentId) return;
+  try {
+    const result = await getAgentById(agentId);
+    const latest = result?.data;
+    if (!latest) return;
+    savedAgent.value = latest;
+    formData.value = JSON.parse(JSON.stringify(latest));
+    workflowDraftRevision.value = Number(latest.draft_revision || 0);
+    workflowPublishedVersion.value = Number(latest.published_version || 0);
+    await refreshWorkflowPublishState(agentId);
+    workflowValidationMessage.value = '';
+    MessagePlugin.success('已重新加载最新工作流草稿');
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '重新加载工作流失败');
+  }
+}
 async function handleWorkflowRun() {
   if (workflowRunLoading.value || saving.value || props.readOnly || !isWorkflow.value) return;
   workflowRunLoading.value = true;
   try {
-    const success = await handleSave();
-    if (!success) return;
-    const agentId = formData.value.id || editorAgent.value?.id;
-    if (!agentId) {
-      throw new Error(t('agent.messages.saveFailed'));
+    // 新建工作流必须先取得 agent_id；已有工作流由试跑动作在发起前保存
+    // 当前草稿，避免这里保存一次、试跑时又保存一次导致修订号无意义递增。
+    if (editorMode.value === 'create') {
+      const success = await handleSave();
+      if (!success) return;
     }
-    settingsStore.selectAgent(agentId);
-    handleClose();
-    await router.push({ path: '/platform/creatChat', query: { agent_id: agentId } });
+    currentSection.value = 'workflow';
+    await nextTick();
+    workflowEditorRef.value?.openDebugRun();
   } catch (e: any) {
-    MessagePlugin.error(e?.message || t('createChat.messages.createError'));
+    MessagePlugin.error(e?.message || '打开工作流试跑失败');
   } finally {
     workflowRunLoading.value = false;
   }
@@ -5125,7 +5199,9 @@ async function handleWorkflowRun() {
 const handleSave = async (): Promise<boolean> => {
   if (isWorkflow.value) {
     ensureWorkflowDefinition();
-    if (!workflowEditorRef.value?.validate()) {
+    // 普通保存只阻止会丢失用户输入的 JSON 语法错误；DAG、资源和变量
+    // 完整校验留给发布与试跑，允许用户先保存未完成的中间草稿。
+    if (!workflowEditorRef.value?.validateDraftSyntax?.()) {
       currentSection.value = 'workflow';
       return false;
     }
@@ -5227,13 +5303,20 @@ const handleSave = async (): Promise<boolean> => {
       }
       savedAgent.value = created;
       formData.value.id = created.id;
+      workflowDraftRevision.value = Number(created.draft_revision || 0);
+      workflowPublishedVersion.value = Number(created.published_version || 0);
+      workflowPublishedDraftRevision.value = 0;
       if (!isWorkflow.value) markContextualGuideDone('agentCreate')
       currentSection.value = 'basic';
       void loadAgentIntegrationCounts(created.id);
       MessagePlugin.success(isWorkflow.value ? t('workflow.messages.created') : t('agent.messages.created'));
       emit('success', created);
     } else {
-      await updateAgent(formData.value.id, payload);
+      if (isWorkflow.value) {
+        await saveWorkflowDraft();
+      } else {
+        await updateAgent(formData.value.id, payload);
+      }
       MessagePlugin.success(isWorkflow.value ? (t('workflow.messages.updated') || '工作流更新成功') : t('agent.messages.updated'));
       emit('success');
       handleClose();

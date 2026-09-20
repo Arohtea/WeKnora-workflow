@@ -121,6 +121,9 @@ type agentService struct {
 	// artifactCollector 在工作流 skill 节点执行完成后收集沙箱产物文件。
 	// 由 DI 容器通过 WithArtifactCollector 注入；nil 时静默跳过收集（无沙箱后端的部署）。
 	artifactCollector *ArtifactCollector
+	workflowRepo      repository.WorkflowRepository
+	taskEnqueuer      interfaces.TaskEnqueuer
+	taskPendingRepo   interfaces.TaskPendingOpsRepository
 }
 
 // WithArtifactCollector 把 ArtifactCollector 注入到 agentService，使工作流 skill 节点
@@ -161,6 +164,8 @@ func NewAgentService(
 	userRepo interfaces.UserRepository,
 	kbShareService interfaces.KBShareService,
 	artifactCollector *ArtifactCollector,
+	taskEnqueuer interfaces.TaskEnqueuer,
+	taskPendingRepo interfaces.TaskPendingOpsRepository,
 ) interfaces.AgentService {
 	return &agentService{
 		browserSkill:         browserSkill,
@@ -189,6 +194,9 @@ func NewAgentService(
 		sandboxPinner:        sandboxPinner,
 		sandboxPolicy:        sandboxPolicy,
 		artifactCollector:    artifactCollector,
+		workflowRepo:         repository.NewWorkflowRepository(db),
+		taskEnqueuer:         taskEnqueuer,
+		taskPendingRepo:      taskPendingRepo,
 	}
 }
 

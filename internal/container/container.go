@@ -301,6 +301,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 		return manager, nil
 	}))
 	must(container.Provide(service.NewAgentService))
+	must(container.Provide(service.NewWorkflowNodeTaskService, dig.Name("workflowNodeTask")))
 
 	// Session service (depends on agent service)
 	// SessionService is created after AgentService and passes itself to AgentService.CreateAgentEngine when needed
@@ -347,6 +348,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 		must(container.Provide(router.NewMaintenanceAsynqServer, dig.Name("maintenanceAsynqServer")))
 		must(container.Provide(router.NewSharedAsynqServer, dig.Name("sharedAsynqServer")))
 		must(container.Provide(router.NewWikiAsynqServer, dig.Name("wikiAsynqServer")))
+		must(container.Provide(router.NewWorkflowAsynqServer, dig.Name("workflowAsynqServer")))
 		// Asynq inspector for cancel-by-knowledge-id (best-effort
 		// dequeue of pending/scheduled/retry tasks + active-task cancel).
 		must(container.Provide(router.NewAsynqInspector))
@@ -382,6 +384,16 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	logger.Debugf(ctx, "[Container] Data source sync framework registered")
 	must(container.Invoke(startAuditLogRetention))
 	logger.Debugf(ctx, "[Container] Audit log retention runner registered")
+	must(container.Provide(service.NewWorkflowRunRetentionRunner))
+	must(container.Provide(func(s interfaces.AgentService) (interfaces.WorkflowRunRetentionService, error) {
+		retention, ok := s.(interfaces.WorkflowRunRetentionService)
+		if !ok {
+			return nil, fmt.Errorf("agent service does not implement workflow run retention")
+		}
+		return retention, nil
+	}))
+	must(container.Invoke(startWorkflowRunRetention))
+	logger.Debugf(ctx, "[Container] Workflow run retention runner registered")
 	must(container.Provide(service.NewHousekeepingService))
 	must(container.Invoke(startHousekeepingService))
 	logger.Debugf(ctx, "[Container] Knowledge housekeeping runner registered")
@@ -487,6 +499,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// persistence succeeded immediately before trigger enqueue failed). Re-arm
 	// them only after the matching handlers are ready.
 	must(container.Invoke(recoverPendingWikiTasks))
+	must(container.Invoke(recoverPendingWorkflowTasks))
 
 	logger.Infof(ctx, "[Container] Container initialization completed successfully")
 	return container
@@ -1820,6 +1833,20 @@ func startAuditLogRetention(
 ) {
 	runner.Start(context.Background())
 	cleaner.RegisterWithName("AuditLogRetentionRunner", func() error {
+		runner.Stop()
+		return nil
+	})
+}
+
+// startWorkflowRunRetention 启动工作流运行记录的每日清理，并注册停机回收。
+//
+// 与审计日志清理采用同一模式：容器初始化时拉起协程，ResourceCleaner 在优雅
+// 停机阶段停止它，避免扫描过程中收到 SIGTERM 遗留游离的 goroutine。
+func startWorkflowRunRetention(
+	runner *service.WorkflowRunRetentionRunner, cleaner interfaces.ResourceCleaner,
+) {
+	runner.Start(context.Background())
+	cleaner.RegisterWithName("WorkflowRunRetentionRunner", func() error {
 		runner.Stop()
 		return nil
 	})

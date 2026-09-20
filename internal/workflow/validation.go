@@ -17,6 +17,29 @@ import (
 	"github.com/dominikbraun/graph"
 )
 
+var (
+	workflowNodeErrorRE = regexp.MustCompile(`workflow (?:node|节点) ([A-Za-z0-9_-]+)`)
+	workflowEdgeErrorRE = regexp.MustCompile(`workflow edge ([A-Za-z0-9_-]+)`)
+)
+
+func validationIssueCode(err error) string {
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "unreachable") || strings.Contains(message, "不可达"):
+		return "UNREACHABLE_NODE"
+	case strings.Contains(message, "acyclic") || strings.Contains(message, "cycle"):
+		return "CYCLE"
+	case strings.Contains(message, "condition") || strings.Contains(message, "路由"):
+		return "INVALID_CONDITION"
+	case strings.Contains(message, "template") || strings.Contains(message, "引用"):
+		return "INVALID_REFERENCE"
+	case strings.Contains(message, "branch mode") || strings.Contains(message, "分支模式"):
+		return "INVALID_BRANCH_MODE"
+	default:
+		return "INVALID_WORKFLOW"
+	}
+}
+
 const (
 	// MaxNodes 限制单个工作流的节点数量。
 	MaxNodes = 50
@@ -78,11 +101,15 @@ var blockedHTTPHeaders = map[string]struct{}{
 	"Access-Token":        {},
 }
 
-// NormalizeConfig 为工作流智能体补齐默认图、验证 DAG，并把节点资源同步到顶层配置。
+// NormalizeDraftConfig 把工作流草稿迁移到当前结构，并校验节点配置仍可被解析。
+//
+// 草稿允许暂时缺少连线、必填配置或可用资源，因此这里不检查 DAG、可达性、
+// 变量作用域和资源可用性。唯一会阻止保存的是执行器无法再读回的结构性问题，
+// 例如不支持的 schema 版本或损坏的节点 JSON。
 //
 // @param config 待归一化的智能体配置。
-// @returns 配置不合法时返回可直接展示给编辑器的错误。
-func NormalizeConfig(config *appTypes.CustomAgentConfig) error {
+// @returns 草稿结构无法迁移或解析时返回错误。
+func NormalizeDraftConfig(config *appTypes.CustomAgentConfig) error {
 	if config == nil || config.AgentType != appTypes.AgentTypeWorkflow {
 		return nil
 	}
@@ -90,8 +117,8 @@ func NormalizeConfig(config *appTypes.CustomAgentConfig) error {
 	if config.Workflow == nil {
 		config.Workflow = appTypes.DefaultWorkflowDefinition()
 	}
-	if config.Workflow.Version == 0 {
-		config.Workflow.Version = appTypes.WorkflowVersion
+	if err := MigrateDefinition(config.Workflow); err != nil {
+		return err
 	}
 	if config.Workflow.Viewport.Zoom == 0 {
 		config.Workflow.Viewport.Zoom = 1
@@ -100,15 +127,15 @@ func NormalizeConfig(config *appTypes.CustomAgentConfig) error {
 		if len(config.Workflow.Nodes[i].Config) == 0 {
 			config.Workflow.Nodes[i].Config = json.RawMessage(`{}`)
 		}
+		if !json.Valid(config.Workflow.Nodes[i].Config) {
+			return fmt.Errorf("workflow node %s has invalid config JSON", config.Workflow.Nodes[i].ID)
+		}
 	}
-
-	if err := Validate(config.Workflow); err != nil {
-		return err
-	}
-	refs, err := CollectResources(config.Workflow)
-	if err != nil {
-		return err
-	}
+	// 草稿编辑过程中，节点表单可能只填了一半。此时 RawMessage 仍是合法
+	// JSON，但强类型解码会因为临时的字段类型不匹配而失败。顶层资源字段只是
+	// 运行时派生缓存，保存阶段按可识别字段尽力收集即可；发布/试跑会继续通过
+	// CollectResources 和 Validate 做严格检查。
+	refs := collectDraftResources(config.Workflow)
 
 	config.AllowedTools = refs.BuiltinTools
 	config.KnowledgeBases = refs.KnowledgeBaseIDs
@@ -119,9 +146,144 @@ func NormalizeConfig(config *appTypes.CustomAgentConfig) error {
 	config.KBSelectionMode = selectionMode(refs.KnowledgeBaseIDs)
 	config.MCPSelectionMode = selectionMode(refs.MCPServiceIDs)
 	config.SkillsSelectionMode = selectionMode(refs.SkillNames)
-	if len(refs.SkillNames) > 0 && strings.TrimSpace(config.SandboxConfigID) == "" {
+	return nil
+}
+
+// collectDraftResources 从合法 JSON 草稿中尽力提取资源引用。
+//
+// 该函数不得把节点字段类型错误升级为保存失败：编辑器需要能保存尚未完成的
+// 中间状态。无法识别的字段会被忽略，原始节点 Config 不会被修改。
+func collectDraftResources(definition *appTypes.WorkflowDefinition) *ResourceReferences {
+	refs := &ResourceReferences{}
+	if definition == nil {
+		return refs
+	}
+	for _, node := range definition.Nodes {
+		var raw map[string]interface{}
+		if len(node.Config) == 0 || json.Unmarshal(node.Config, &raw) != nil {
+			continue
+		}
+		switch node.Type {
+		case appTypes.WorkflowNodeTypeRetrieval:
+			refs.KnowledgeBaseIDs = appendUnique(refs.KnowledgeBaseIDs, draftStringSlice(raw["knowledge_base_ids"])...)
+		case appTypes.WorkflowNodeTypeTool:
+			kind, _ := raw["kind"].(string)
+			switch kind {
+			case appTypes.WorkflowToolKindBuiltin:
+				if value, ok := raw["tool_name"].(string); ok {
+					refs.BuiltinTools = appendUnique(refs.BuiltinTools, value)
+				}
+			case appTypes.WorkflowToolKindMCP:
+				if value, ok := raw["service_id"].(string); ok {
+					refs.MCPServiceIDs = appendUnique(refs.MCPServiceIDs, value)
+				}
+			case appTypes.WorkflowToolKindSkill:
+				if value, ok := raw["skill_name"].(string); ok {
+					refs.SkillNames = appendUnique(refs.SkillNames, value)
+				}
+			}
+		}
+	}
+	return refs
+}
+
+func draftStringSlice(value interface{}) []string {
+	items, ok := value.([]interface{})
+	if !ok {
+		return nil
+	}
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		if value, ok := item.(string); ok {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+// ValidatePublishedConfig 对准备试跑或发布的工作流执行严格校验。
+//
+// @param config 待发布或试跑的智能体配置。
+// @returns DAG、变量、节点配置或运行必需配置不合法时返回错误。
+func ValidatePublishedConfig(config *appTypes.CustomAgentConfig) error {
+	if err := NormalizeDraftConfig(config); err != nil {
+		return err
+	}
+	if config == nil || config.AgentType != appTypes.AgentTypeWorkflow {
+		return nil
+	}
+	if err := Validate(config.Workflow); err != nil {
+		return err
+	}
+	if len(config.SelectedSkills) > 0 && strings.TrimSpace(config.SandboxConfigID) == "" {
 		return fmt.Errorf("workflow skill nodes require sandbox_config_id")
 	}
+	return nil
+}
+
+// NormalizeConfig 保留旧调用方的严格语义。
+//
+// 新代码必须根据场景显式选择 NormalizeDraftConfig 或
+// ValidatePublishedConfig，避免再次把草稿保存与发布校验混为一谈。
+//
+// @param config 待严格归一化的智能体配置。
+// @returns 配置不满足发布要求时返回错误。
+func NormalizeConfig(config *appTypes.CustomAgentConfig) error {
+	return ValidatePublishedConfig(config)
+}
+
+// MigrateDefinition 将旧版工作流定义转换为当前版本，并补齐所有影响执行确定性的默认值。
+//
+// v1 没有分支模式和稳定出边顺序，历史执行器会运行所有命中的条件边。因此，
+// 只要一个节点存在多条出边，就必须迁移成 all_match；单出边节点使用 first_match。
+// 迁移只做兼容转换，不替代发布阶段的严格校验。
+//
+// @param definition 待迁移的工作流定义，会被原地更新。
+// @returns 版本号不支持或定义为空时返回错误。
+func MigrateDefinition(definition *appTypes.WorkflowDefinition) error {
+	if definition == nil {
+		return fmt.Errorf("workflow definition is required")
+	}
+	version := definition.SchemaVersion
+	if version == 0 {
+		version = definition.Version
+	}
+	if version == 0 {
+		version = 1
+	}
+	if version != 1 && version != appTypes.WorkflowVersion {
+		return fmt.Errorf("unsupported workflow version %d", version)
+	}
+
+	outgoingCount := make(map[string]int)
+	for _, edge := range definition.Edges {
+		outgoingCount[edge.Source]++
+	}
+	orderBySource := make(map[string]int)
+	for index := range definition.Edges {
+		edge := &definition.Edges[index]
+		// v1 没有可靠的 order。即便旧数据被序列化成了全零，也按原
+		// 出边切片顺序分配稳定序号；新定义的显式 order 则保持不变。
+		if version == 1 || edge.Order < 0 {
+			edge.Order = orderBySource[edge.Source]
+		}
+		orderBySource[edge.Source]++
+	}
+	for index := range definition.Nodes {
+		node := &definition.Nodes[index]
+		if version == 1 || strings.TrimSpace(node.BranchMode) == "" {
+			if outgoingCount[node.ID] > 1 {
+				node.BranchMode = appTypes.WorkflowBranchModeAllMatch
+			} else {
+				node.BranchMode = appTypes.WorkflowBranchModeFirstMatch
+			}
+		}
+		if strings.TrimSpace(node.BranchMode) == "" {
+			node.BranchMode = appTypes.WorkflowBranchModeFirstMatch
+		}
+	}
+	definition.Version = appTypes.WorkflowVersion
+	definition.SchemaVersion = appTypes.WorkflowVersion
 	return nil
 }
 
@@ -211,6 +373,9 @@ func Validate(definition *appTypes.WorkflowDefinition) error {
 	if definition == nil {
 		return fmt.Errorf("workflow definition is required")
 	}
+	if err := MigrateDefinition(definition); err != nil {
+		return err
+	}
 	if definition.Version != appTypes.WorkflowVersion {
 		return fmt.Errorf("unsupported workflow version %d", definition.Version)
 	}
@@ -236,6 +401,10 @@ func Validate(definition *appTypes.WorkflowDefinition) error {
 		}
 		if strings.TrimSpace(node.Name) == "" {
 			return fmt.Errorf("workflow node %s requires a name", node.ID)
+		}
+		if node.BranchMode != appTypes.WorkflowBranchModeFirstMatch &&
+			node.BranchMode != appTypes.WorkflowBranchModeAllMatch {
+			return fmt.Errorf("workflow node %s uses unsupported branch mode %q", node.ID, node.BranchMode)
 		}
 		if len([]rune(node.Name)) > 100 {
 			return fmt.Errorf("workflow node %s name exceeds 100 characters", node.ID)
@@ -388,6 +557,37 @@ func Validate(definition *appTypes.WorkflowDefinition) error {
 		}
 	}
 	return nil
+}
+
+// ValidateIssues 返回编辑器可直接消费的结构化校验问题。
+//
+// 现有 Validate 保留单错误字符串契约，避免影响旧调用方；新接口使用本方法，
+// 并尽量从兼容错误文本中提取节点、连线和字段路径。
+//
+// @param definition 待校验的工作流定义。
+// @returns 所有当前可识别的校验问题；定义合法时返回空切片。
+func ValidateIssues(definition *appTypes.WorkflowDefinition) []appTypes.WorkflowValidationIssue {
+	issues := make([]appTypes.WorkflowValidationIssue, 0)
+	if definition == nil {
+		return append(issues, appTypes.WorkflowValidationIssue{
+			Code:    "WORKFLOW_REQUIRED",
+			Message: "工作流定义不能为空",
+		})
+	}
+	if err := Validate(definition); err != nil {
+		issue := appTypes.WorkflowValidationIssue{
+			Code:    validationIssueCode(err),
+			Message: err.Error(),
+		}
+		if match := workflowNodeErrorRE.FindStringSubmatch(err.Error()); len(match) > 1 {
+			issue.NodeID = match[1]
+		}
+		if match := workflowEdgeErrorRE.FindStringSubmatch(err.Error()); len(match) > 1 {
+			issue.EdgeID = match[1]
+		}
+		issues = append(issues, issue)
+	}
+	return issues
 }
 
 // templateField 描述一个节点内可渲染的模板字段，用于报错时告诉用户改哪里。

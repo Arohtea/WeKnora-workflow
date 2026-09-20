@@ -66,5 +66,6 @@ const (
 	TaskScopeKnowledgeBase = "knowledge_base"
 	TaskScopeKnowledge     = "knowledge"
 	TaskScopeTenant        = "tenant"
+	TaskScopeWorkflowRun   = "workflow_run"
 	TaskScopeUnknown       = "unknown"
 )

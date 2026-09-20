@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	agenttools "github.com/Tencent/WeKnora/internal/agent/tools"
 	"github.com/Tencent/WeKnora/internal/agent/skills"
+	agenttools "github.com/Tencent/WeKnora/internal/agent/tools"
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -30,7 +30,7 @@ func (s *agentService) ValidateWorkflowResources(
 	if config == nil || config.AgentType != types.AgentTypeWorkflow {
 		return nil
 	}
-	if err := workflowruntime.NormalizeConfig(config); err != nil {
+	if err := workflowruntime.ValidatePublishedConfig(config); err != nil {
 		return err
 	}
 
@@ -113,7 +113,7 @@ func (s *agentService) WorkflowCatalog(
 	if agent.Config.AgentType != types.AgentTypeWorkflow {
 		return nil, fmt.Errorf("agent is not a workflow agent")
 	}
-	if err := workflowruntime.NormalizeConfig(&agent.Config); err != nil {
+	if err := workflowruntime.NormalizeDraftConfig(&agent.Config); err != nil {
 		return nil, err
 	}
 

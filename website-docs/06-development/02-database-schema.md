@@ -20,14 +20,14 @@ WeKnora 使用版本化迁移维护数据库结构，PostgreSQL 与 SQLite 分�
 
 ```text
 migrations/
-├── versioned/     # PostgreSQL/ParadeDB 版本化迁移：000000-000091 共 92 版（184 个 .up/.down.sql 文件）
+├── versioned/     # PostgreSQL/ParadeDB 版本化迁移：000000-000097 共 98 版（196 个 .up/.down.sql 文件）
 ├── sqlite/        # SQLite 迁移：000000_init（压平的全量 schema）+ 其后的增量版本
 ├── paradedb/      # ParadeDB 附加脚本：00-init-db.sql（扩展初始化）、01-migrate-to-paradedb.sql（存量库切换）
 └── mysql/         # 00-init-db.sql，遗留的一次性 MySQL 建表脚本（未接入代码）
 ```
 
-- PostgreSQL 的 `versioned/` 从 `000000_init` 到 `000091_mcp_tool_enabled`；
-- `sqlite/` 以 `000000_init` 作为压平后的全量初始化（JSONB→TEXT、SERIAL→AUTOINCREMENT 等方言差异已适配），其后按需追加增量版本（当前到 `000013_mcp_tool_enabled`），同样由 golang-migrate 顺序执行；
+- PostgreSQL 的 `versioned/` 从 `000000_init` 到 `000097_workflow_production_v1`；
+- `sqlite/` 以 `000000_init` 作为压平后的全量初始化（JSONB→TEXT、SERIAL→AUTOINCREMENT 等方言差异已适配），其后按需追加增量版本（当前到 `000018_workflow_production_v1`），同样由 golang-migrate 顺序执行；
 - `paradedb/00-init-db.sql` 创建 `pg_search` 等扩展；BM25 索引使用中文 Lindera 分词器建在 `embeddings.content` 上。
 
 ### versioned/ 迁移史概览（按主题） {#_2-1-versioned-迁移史概览-按主题}
@@ -50,7 +50,7 @@ migrations/
 | 000078 | 分块编辑与自定义元数据 | `chunks` 增加 `source_content`/`content_revision`/`index_status`/`last_editor_id`/`context_header`，新增 `chunk_revisions` 表，`knowledges` 增加 `custom_metadata` |
 | 000079 | 知识库文件夹树 | `knowledges` 增加 `folder_path` 列并回填历史目录上传（原先路径塞在 `file_name` 里），新增 `(tenant_id, knowledge_base_id, folder_path)` 索引 |
 
-### 新增迁移（000080–000091） {#_2-2-新增迁移-000080–000091}
+### 新增迁移（000080–000097） {#_2-2-新增迁移-000080–000097}
 
 | 版本 | 变更 |
 | --- | --- |
@@ -66,6 +66,12 @@ migrations/
 | 000089 | 技能 envs、tenant_user_env_vars |
 | 000090 | tenant_skill_catalog；tenant_skills.catalog_id，回填已有安装 |
 | 000091 | mcp_tool_approvals.enabled，默认 true |
+| 000092 | mcp_services.usage_instructions；mcp_metadata（服务使用说明持久目录表） |
+| 000093 | browser_devices、browser_pairings、browser_task_interruptions |
+| 000094 | memory_subjects.extraction_state、memory_items.replaces_id、memory_extraction_sessions |
+| 000095 | memory_item_embeddings.embedding（halfvec）；受 `vector` 扩展门控 |
+| 000096 | 钉钉渠道强制 Stream 模式，HTTP 回调停用（无表变更） |
+| 000097 | custom_agents.draft_revision/published_version；workflow_versions、workflow_runs、workflow_run_nodes；回填存量工作流的兼容发布版本 1 |
 
 SQLite 版本号独立演进，不能与 PostgreSQL 数字一一对应：
 
@@ -78,6 +84,11 @@ SQLite 版本号独立演进，不能与 PostgreSQL 数字一一对应：
 | 000009 | 历史 Embed memory 标志列；当前渠道接口不暴露此字段 |
 | 000010–000011 | 多标签关联、principal 模型 |
 | 000012–000013 | 消息 usage、MCP 工具 enabled |
+| 000014 | 浏览器授权三表（browser_devices / browser_pairings / browser_task_interruptions） |
+| 000015 | 记忆一致性：memory_extraction_sessions、extraction_state、replaces_id |
+| 000016 | 记忆向量检索的作用域索引（SQLite 无向量类型，排序仍在应用内） |
+| 000017 | 钉钉强制 Stream 模式 |
+| 000018 | workflow_versions / workflow_runs / workflow_run_nodes，及 custom_agents 两个版本列 |
 
 基线 schema 与后续增量共同决定新建库和已有库的最终结果；不能只看新增迁移文件名判断 Lite 是否有某张表。
 
@@ -130,6 +141,7 @@ SQLite 版本号独立演进，不能与 PostgreSQL 数字一一对应：
 | --- | --- | --- |
 | `custom_agents` | 自定义 Agent | **复合主键 (`id`,`tenant_id`)**、`name`、`is_builtin`、`created_by`（FK→users）、`runnable_by_viewer`、`config`（JSONB：模式/模型/工具/知识范围） |
 | `mcp_services` | MCP 服务配置 | `id`、`tenant_id`、`name`、`enabled`、`transport_type`（stdio/sse/…）、`url`/`headers`/`auth_config`/`stdio_config`/`env_vars`（JSONB）、`is_builtin` |
+| `mcp_metadata` | MCP 服务元数据目录（000092） | (`tenant_id`,`service_id`,`principal`) 主键、`config_fingerprint`、`tools`（JSONB 工具目录）、`instructions`、`server_name`/`server_version`/`server_description`、`synced_at`；`service_id` FK→mcp_services，CASCADE |
 | `mcp_tool_approvals` | MCP 工具审批策略（000042） | (`tenant_id`,`service_id`,`tool_name`) 唯一、`require_approval`、`enabled`（默认 true） |
 | `mcp_oauth_clients` | MCP OAuth 客户端（000062） | (`tenant_id`,`service_id`) 唯一、`client_id`/`client_secret`/`redirect_uri` |
 | `mcp_oauth_tokens` | MCP OAuth 令牌 | (`tenant_id`,`user_id`,`service_id`) 唯一、`access_token`/`refresh_token`、`expires_at`、`refresh_lease_id`/`refresh_lease_until`（000074，防并发刷新） |
@@ -147,16 +159,37 @@ SQLite 版本号独立演进，不能与 PostgreSQL 数字一一对应：
 
 目录定义与安装分开；禁用技能只改变可见性。个人变量使用完整 principal 身份，不能按 IM 共享的合成 user_id 合并。空间变量与个人值加密存储，响应不回传个人值明文。
 
+### 工作流运行
+
+| 表 | 用途与关键字段 |
+| --- | --- |
+| `workflow_versions` | 不可变发布版本（000097）。(tenant_id,agent_id,version) 主键、draft_revision、definition/config_snapshot（JSONB 定义与配置快照）、published_by/published_at；FK (agent_id,tenant_id)→custom_agents 复合主键，CASCADE |
+| `workflow_runs` | 每次工作流运行记录（000097）。id、tenant_id、agent_id、workflow_version、definition_snapshot/config_snapshot（运行时绑定的不可变快照）、trigger_source、status、session_id/message_id/request_id、输入输出摘要与 input_truncated/output_truncated 截断标志、error_code/error_summary/error_truncated、usage（JSONB）、started_at/finished_at/duration_ms |
+| `workflow_run_nodes` | 节点级 trace（000097）。run_id（FK→workflow_runs，CASCADE）、node_id/node_name/node_type、branch_path、sequence、status、输入输出与错误摘要及截断标志、usage、起止时间与 duration_ms |
+
+发布版本不可变：每次运行绑定当时的 definition/config 快照，改草稿不影响已在跑的运行。`custom_agents.draft_revision`/`published_version` 记录当前草稿修订号与已发布版本号（000097 起，存量工作流回填兼容发布版本 1）。
+
+### 浏览器授权
+
+| 表 | 用途与关键字段 |
+| --- | --- |
+| `browser_devices` | 已授权的本地浏览器设备（000093）。scope_key 主键、id、tenant、user、label、token_hash/previous_hash（轮换宽限）+ previous_until、expires_at/renew_after、created_at/last_seen_at/revoked_at、owner/owner_url、lease_key/lease_until |
+| `browser_pairings` | 配对中的一次性凭据（000093）。scope_key 主键、token_hash（唯一）、tenant、user、expires_at |
+| `browser_task_interruptions` | 浏览器任务中断标记（000093）。PK（scope_key,session） |
+
+只持久化授权、租约与中断标记；不存浏览器 Cookie 或截图，实际浏览器进程保持临时性。详见《浏览器技能生产化》。
+
 ### 长期记忆
 
 | 表 | 用途与关键字段 |
 | --- | --- |
-| `memory_subjects` | (tenant_id,subject_id) 唯一；个人 enabled、常驻 block_text、item_count、extract_cursor/pending_sessions/extract_scheduled_at、整理时间 |
-| `memory_items` | kind/content/topic/normalized_key、importance/origin/status、来源会话/消息、valid_from/invalid_at/expires_at、superseded_by |
+| `memory_subjects` | (tenant_id,subject_id) 唯一；个人 enabled、常驻 block_text、item_count、extract_cursor/pending_sessions/extract_scheduled_at、extraction_state（000094，抽取租约）、整理时间 |
+| `memory_items` | kind/content/topic/normalized_key、importance/origin/status、来源会话/消息、valid_from/invalid_at/expires_at、superseded_by、replaces_id（000094，待确认提案要替换的目标） |
+| `memory_extraction_sessions` | 按会话记录抽取进度（000094）；(tenant_id,subject_id,session_id) 主键、revision、cursor_at/cursor_id、pending、failure_count/failure_code、失败区间 failed_from_*/failed_to_*/failed_at、updated_at |
 | `memory_tombstones` | 删除/拒绝的主题与内容指纹，用于抑制重复抽取，不保存原正文 |
 | `memory_topic_stats` | topic/aliases、hits、last_seen_at/promoted_at |
 | `memory_doc_affinity` | knowledge_id/knowledge_base_id/title、hits/last_used_at |
-| `memory_item_embeddings` | item_id、model_id、dims、vector；与条目分表存储 |
+| `memory_item_embeddings` | item_id、model_id、dims、vector、embedding（halfvec，000095，镜像 BYTEA 列供数据库内排序）；与条目分表存储；无 HNSW 索引，靠 (tenant_id,subject_id,model_id,dims) 索引精确排序 |
 
 subject_id 使用 Principal.StorageID()，与 tenant_id 共同隔离身份。向量记录不放进条目列表，也不改变原知识库的访问权。
 
@@ -254,6 +287,9 @@ erDiagram
     organizations ||--o{ organization_join_requests : "加入申请"
     knowledge_bases ||--o{ kb_shares : "被共享"
     custom_agents ||--o{ agent_shares : "被共享 (id, tenant_id)"
+    custom_agents ||--o{ workflow_versions : "发布版本"
+    custom_agents ||--o{ workflow_runs : "运行记录"
+    workflow_runs ||--o{ workflow_run_nodes : "节点 trace"
 
     knowledge_bases ||--o{ wiki_pages : "Wiki 页面"
     wiki_pages }o--o| wiki_folders : "folder_id"
@@ -324,7 +360,7 @@ make migrate-goto version=60       # 迁移/回滚到指定版本
 
 ## 如何新增一个迁移 {#_6-如何新增一个迁移}
 
-1. **创建文件**：`make migrate-create name=add_my_feature`，在 `migrations/versioned/` 下生成下一个版本号（当前最大为 `000091`；创建前再次检查目录，使用下一个空闲版本的 up/down 文件）；
+1. **创建文件**：`make migrate-create name=add_my_feature`，在 `migrations/versioned/` 下生成下一个版本号（当前最大为 `000097`；创建前再次检查目录，使用下一个空闲版本的 up/down 文件）；
 2. **编写 up SQL**：注意 PostgreSQL 方言（JSONB、部分索引、`TIMESTAMP WITH TIME ZONE`）；若涉及 `embeddings` 表，参考既有迁移用 `app.skip_embedding` GUC 做条件门控（`SELECT current_setting('app.skip_embedding', true)`），保证非 postgres 检索引擎部署也能通过迁移；
 3. **编写 down SQL**：必须可逆（drop column/table/index），否则回滚链会断；
 4. **同步 SQLite**：`migrations/sqlite/000000_init.up.sql` 是压平的全量 schema，**新增列/表必须合并进去**（注意方言转换：JSONB→TEXT、SERIAL→INTEGER AUTOINCREMENT、无部分索引语法差异等）。若变更需要在已有 Lite 库上生效（例如删表、删数据），还要在 `migrations/sqlite/` 追加一个增量版本；

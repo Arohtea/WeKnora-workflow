@@ -4,7 +4,12 @@ import "encoding/json"
 
 const (
 	// WorkflowVersion 是当前工作流配置格式版本。
-	WorkflowVersion = 1
+	WorkflowVersion = 2
+
+	// WorkflowBranchModeFirstMatch 按稳定顺序只执行首个命中的分支。
+	WorkflowBranchModeFirstMatch = "first_match"
+	// WorkflowBranchModeAllMatch 并行执行全部命中的分支。
+	WorkflowBranchModeAllMatch = "all_match"
 
 	// WorkflowNodeTypeStart 表示工作流唯一入口节点。
 	WorkflowNodeTypeStart = "start"
@@ -36,19 +41,23 @@ const (
 
 // WorkflowDefinition 是持久化到 custom_agents.config 的版本化工作流定义。
 type WorkflowDefinition struct {
-	Version  int              `yaml:"version" json:"version"`
-	Nodes    []WorkflowNode   `yaml:"nodes" json:"nodes"`
-	Edges    []WorkflowEdge   `yaml:"edges" json:"edges"`
-	Viewport WorkflowViewport `yaml:"viewport" json:"viewport"`
+	// Version 保留旧字段名，兼容已经保存的 v1/v2 工作流。
+	Version int `yaml:"version,omitempty" json:"version,omitempty"`
+	// SchemaVersion 是导入导出及新接口使用的明确格式版本。
+	SchemaVersion int              `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
+	Nodes         []WorkflowNode   `yaml:"nodes" json:"nodes"`
+	Edges         []WorkflowEdge   `yaml:"edges" json:"edges"`
+	Viewport      WorkflowViewport `yaml:"viewport" json:"viewport"`
 }
 
 // WorkflowNode 是画布上的统一节点结构，Config 由节点类型决定。
 type WorkflowNode struct {
-	ID       string           `yaml:"id" json:"id"`
-	Type     string           `yaml:"type" json:"type"`
-	Name     string           `yaml:"name" json:"name"`
-	Position WorkflowPosition `yaml:"position" json:"position"`
-	Config   json.RawMessage  `yaml:"config" json:"config"`
+	ID         string           `yaml:"id" json:"id"`
+	Type       string           `yaml:"type" json:"type"`
+	Name       string           `yaml:"name" json:"name"`
+	BranchMode string           `yaml:"branch_mode,omitempty" json:"branch_mode,omitempty"`
+	Position   WorkflowPosition `yaml:"position" json:"position"`
+	Config     json.RawMessage  `yaml:"config" json:"config"`
 }
 
 // WorkflowEdge 描述两个节点间的确定性有向连接和可选路由条件。
@@ -115,10 +124,11 @@ type WorkflowLLMDecisionNodeConfig struct {
 
 // WorkflowHTTPNodeConfig 控制受限 HTTP 请求。
 type WorkflowHTTPNodeConfig struct {
-	Method       string            `yaml:"method" json:"method"`
-	URL          string            `yaml:"url" json:"url"`
-	Headers      map[string]string `yaml:"headers" json:"headers"`
-	BodyTemplate string            `yaml:"body_template" json:"body_template"`
+	Method                 string            `yaml:"method" json:"method"`
+	URL                    string            `yaml:"url" json:"url"`
+	Headers                map[string]string `yaml:"headers" json:"headers"`
+	BodyTemplate           string            `yaml:"body_template" json:"body_template"`
+	IdempotencyKeyTemplate string            `yaml:"idempotency_key_template,omitempty" json:"idempotency_key_template,omitempty"`
 }
 
 // WorkflowToolNodeConfig 控制内置工具、MCP 工具或 Skill 小智能体。
@@ -129,6 +139,7 @@ type WorkflowToolNodeConfig struct {
 	Arguments    map[string]interface{} `yaml:"arguments,omitempty" json:"arguments,omitempty"`
 	SkillName    string                 `yaml:"skill_name,omitempty" json:"skill_name,omitempty"`
 	TaskTemplate string                 `yaml:"task_template,omitempty" json:"task_template,omitempty"`
+	RetrySafe    bool                   `yaml:"retry_safe,omitempty" json:"retry_safe,omitempty"`
 }
 
 // WorkflowEndNodeConfig 控制结束节点输出文本；空模板沿用上游节点文本。
@@ -179,21 +190,24 @@ type WorkflowCatalogSkill struct {
 // @returns 独立的新工作流定义，调用方可以安全修改。
 func DefaultWorkflowDefinition() *WorkflowDefinition {
 	return &WorkflowDefinition{
-		Version: WorkflowVersion,
+		Version:       WorkflowVersion,
+		SchemaVersion: WorkflowVersion,
 		Nodes: []WorkflowNode{
 			{
-				ID:       "start",
-				Type:     WorkflowNodeTypeStart,
-				Name:     "开始",
-				Position: WorkflowPosition{X: 80, Y: 160},
-				Config:   json.RawMessage(`{}`),
+				ID:         "start",
+				Type:       WorkflowNodeTypeStart,
+				Name:       "开始",
+				BranchMode: WorkflowBranchModeFirstMatch,
+				Position:   WorkflowPosition{X: 80, Y: 160},
+				Config:     json.RawMessage(`{}`),
 			},
 			{
-				ID:       "end",
-				Type:     WorkflowNodeTypeEnd,
-				Name:     "结束",
-				Position: WorkflowPosition{X: 420, Y: 160},
-				Config:   json.RawMessage(`{"text_template":"{{input.query}}"}`),
+				ID:         "end",
+				Type:       WorkflowNodeTypeEnd,
+				Name:       "结束",
+				BranchMode: WorkflowBranchModeFirstMatch,
+				Position:   WorkflowPosition{X: 420, Y: 160},
+				Config:     json.RawMessage(`{"text_template":"{{input.query}}"}`),
 			},
 		},
 		Edges: []WorkflowEdge{
