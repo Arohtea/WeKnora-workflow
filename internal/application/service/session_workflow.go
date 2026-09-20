@@ -118,230 +118,223 @@ func (s *sessionService) runWorkflowQA(
 	eventBus *event.EventBus,
 	publishedWorkflow *types.WorkflowVersionRecord,
 ) error {
-	return s.startPersistentWorkflowQA(ctx, req, agentConfig, eventBus, publishedWorkflow)
-
-	// The legacy in-process executor is kept below as a reference for the node
-	// semantics and test helpers. Formal runs return through the durable state
-	// machine above; only the editor debug API may use a draft snapshot.
-	/*
-		if req == nil || req.CustomAgent == nil || req.Session == nil {
-			return fmt.Errorf("workflow request is incomplete")
-		}
-		runtime, ok := s.agentService.(workflowAgentRuntime)
-		if !ok {
-			return fmt.Errorf("workflow runtime is unavailable")
-		}
-		if summaryModel == nil {
-			return fmt.Errorf("workflow chat model is unavailable")
-		}
-		if eventBus == nil {
-			return fmt.Errorf("workflow event bus is unavailable")
-		}
-		if publishedWorkflow == nil || publishedWorkflow.Version <= 0 {
-			return fmt.Errorf("workflow has not been published; publish it in the editor before running")
-		}
-		if err := workflowruntime.ValidatePublishedConfig(&req.CustomAgent.Config); err != nil {
+	if req == nil || req.CustomAgent == nil || req.Session == nil {
+		return fmt.Errorf("workflow request is incomplete")
+	}
+	runtime, ok := s.agentService.(workflowAgentRuntime)
+	if !ok {
+		return fmt.Errorf("workflow runtime is unavailable")
+	}
+	if summaryModel == nil {
+		return fmt.Errorf("workflow chat model is unavailable")
+	}
+	if eventBus == nil {
+		return fmt.Errorf("workflow event bus is unavailable")
+	}
+	if publishedWorkflow == nil || publishedWorkflow.Version <= 0 {
+		return fmt.Errorf("workflow has not been published; publish it in the editor before running")
+	}
+	if err := workflowruntime.ValidatePublishedConfig(&req.CustomAgent.Config); err != nil {
+		return err
+	}
+	if req.CustomAgent.Config.Workflow == nil {
+		return fmt.Errorf("workflow definition is missing")
+	}
+	if provider, ok := s.agentService.(interface {
+		ValidateWorkflowResources(context.Context, *types.CustomAgentConfig) error
+	}); ok {
+		if err := provider.ValidateWorkflowResources(ctx, &req.CustomAgent.Config); err != nil {
 			return err
 		}
-		if req.CustomAgent.Config.Workflow == nil {
-			return fmt.Errorf("workflow definition is missing")
-		}
-		if provider, ok := s.agentService.(interface {
-			ValidateWorkflowResources(context.Context, *types.CustomAgentConfig) error
-		}); ok {
-			if err := provider.ValidateWorkflowResources(ctx, &req.CustomAgent.Config); err != nil {
-				return err
-			}
-		}
+	}
 
-		// 工作流里的知识检索此前不走 rerank：内置工具注册时 rerank 模型传 nil，
-		// knowledge_search 收到 nil 就静默降级，于是同一个知识库在工作流里的检索质量
-		// 系统性低于普通智能体。这里按普通智能体同样的方式解析 rerank 模型。
-		// 与普通路径的差别是"未配置就降级并告警"而非直接报错：工作流可能已经上线，
-		// 不能因为缺少可选配置就让所有历史工作流停止工作。
-		var rerankModel rerank.Reranker
-		if agentRequiresRerankModel(req.CustomAgent) {
-			rerankModelID := req.CustomAgent.Config.RerankModelID
-			if rerankModelID == "" {
-				logger.Warnf(ctx, "Workflow agent %s runs knowledge retrieval without a rerank model; retrieval quality will be lower than a normal agent", req.CustomAgent.ID)
-			} else if resolved, err := s.modelService.GetRerankModel(ctx, rerankModelID); err != nil {
-				logger.Warnf(ctx, "Failed to get rerank model %s for workflow agent: %v; continuing without rerank", rerankModelID, err)
-			} else {
-				rerankModel = resolved
-			}
+	// 工作流里的知识检索此前不走 rerank：内置工具注册时 rerank 模型传 nil，
+	// knowledge_search 收到 nil 就静默降级，于是同一个知识库在工作流里的检索质量
+	// 系统性低于普通智能体。这里按普通智能体同样的方式解析 rerank 模型。
+	// 与普通路径的差别是"未配置就降级并告警"而非直接报错：工作流可能已经上线，
+	// 不能因为缺少可选配置就让所有历史工作流停止工作。
+	var rerankModel rerank.Reranker
+	if agentRequiresRerankModel(req.CustomAgent) {
+		rerankModelID := req.CustomAgent.Config.RerankModelID
+		if rerankModelID == "" {
+			logger.Warnf(ctx, "Workflow agent %s runs knowledge retrieval without a rerank model; retrieval quality will be lower than a normal agent", req.CustomAgent.ID)
+		} else if resolved, err := s.modelService.GetRerankModel(ctx, rerankModelID); err != nil {
+			logger.Warnf(ctx, "Failed to get rerank model %s for workflow agent: %v; continuing without rerank", rerankModelID, err)
+		} else {
+			rerankModel = resolved
 		}
+	}
 
-		releaseTurn := s.holdSandboxTurn(ctx, req.Session.ID, agentConfig.SandboxConfigID)
-		defer releaseTurn()
+	releaseTurn := s.holdSandboxTurn(ctx, req.Session.ID, agentConfig.SandboxConfigID)
+	defer releaseTurn()
 
-		stagedAttachments, err := s.stageWorkflowAttachments(ctx, req, agentConfig)
-		if err != nil {
-			return err
-		}
+	stagedAttachments, err := s.stageWorkflowAttachments(ctx, req, agentConfig)
+	if err != nil {
+		return err
+	}
 
-		inputQuery := req.Query
-		if req.QuotedContext != "" {
-			inputQuery += "\n\n" + req.QuotedContext
-		}
-		attachmentsText := ""
-		if req.ImageDescription != "" {
-			attachmentsText += "\n\n[用户上传图片内容]\n" + req.ImageDescription
-		}
-		if len(req.Attachments) > 0 {
-			attachmentsText += req.Attachments.BuildPrompt()
-		}
-		if manifest := buildSandboxAttachmentsPrompt(stagedAttachments); manifest != "" {
-			attachmentsText += manifest
-		}
+	inputQuery := req.Query
+	if req.QuotedContext != "" {
+		inputQuery += "\n\n" + req.QuotedContext
+	}
+	attachmentsText := ""
+	if req.ImageDescription != "" {
+		attachmentsText += "\n\n[用户上传图片内容]\n" + req.ImageDescription
+	}
+	if len(req.Attachments) > 0 {
+		attachmentsText += req.Attachments.BuildPrompt()
+	}
+	if manifest := buildSandboxAttachmentsPrompt(stagedAttachments); manifest != "" {
+		attachmentsText += manifest
+	}
 
-		definition := req.CustomAgent.Config.Workflow
-		nodes := make(map[string]types.WorkflowNode, len(definition.Nodes))
-		outgoing := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
-		incoming := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
-		startID := ""
-		for _, node := range definition.Nodes {
-			nodes[node.ID] = node
-			if node.Type == types.WorkflowNodeTypeStart {
-				startID = node.ID
-			}
+	definition := req.CustomAgent.Config.Workflow
+	nodes := make(map[string]types.WorkflowNode, len(definition.Nodes))
+	outgoing := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
+	incoming := make(map[string][]types.WorkflowEdge, len(definition.Nodes))
+	startID := ""
+	for _, node := range definition.Nodes {
+		nodes[node.ID] = node
+		if node.Type == types.WorkflowNodeTypeStart {
+			startID = node.ID
 		}
-		for _, edge := range definition.Edges {
-			outgoing[edge.Source] = append(outgoing[edge.Source], edge)
-			incoming[edge.Target] = append(incoming[edge.Target], edge)
-		}
-		for nodeID := range outgoing {
-			outgoing[nodeID] = workflowruntime.SortedOutgoingEdges(outgoing[nodeID])
-		}
-		if startID == "" {
-			return fmt.Errorf("workflow start node is missing")
-		}
+	}
+	for _, edge := range definition.Edges {
+		outgoing[edge.Source] = append(outgoing[edge.Source], edge)
+		incoming[edge.Target] = append(incoming[edge.Target], edge)
+	}
+	for nodeID := range outgoing {
+		outgoing[nodeID] = workflowruntime.SortedOutgoingEdges(outgoing[nodeID])
+	}
+	if startID == "" {
+		return fmt.Errorf("workflow start node is missing")
+	}
 
-		requestID, _ := types.RequestIDFromContext(ctx)
-		observer := newWorkflowRunObserver(
-			ctx,
-			eventBus,
-			workflowRunStoreFor(s.agentService),
-			publishedWorkflow,
-			definition,
-			agentConfig,
-			workflowRunTenantID(req),
-			req.CustomAgent.ID,
-			workflowRunTriggerSource(req),
-			req.Session.ID,
-			req.AssistantMessageID,
-			inputQuery,
-		)
-		executor := &workflowExecutor{
-			ctx:                ctx,
-			runtime:            runtime,
-			config:             agentConfig,
-			model:              summaryModel,
-			rerankModel:        rerankModel,
-			definition:         definition,
-			eventBus:           eventBus,
-			observer:           observer,
-			sessionID:          req.Session.ID,
-			assistantMessage:   req.AssistantMessageID,
-			requestID:          requestID,
-			inputQuery:         inputQuery,
-			semaphore:          make(chan struct{}, workflowruntime.MaxParallelNodes),
-			nodes:              nodes,
-			outgoing:           outgoing,
-			incoming:           incoming,
-			finalAnswerEventID: generateEventID("workflow-answer"),
-		}
-		variables := map[string]interface{}{
-			"input": map[string]interface{}{
-				"query":            inputQuery,
-				"attachments_text": attachmentsText,
-			},
-			"nodes": map[string]interface{}{},
-		}
+	requestID, _ := types.RequestIDFromContext(ctx)
+	observer := newWorkflowRunObserver(
+		ctx,
+		eventBus,
+		workflowRunStoreFor(s.agentService),
+		publishedWorkflow,
+		definition,
+		agentConfig,
+		workflowRunTenantID(req),
+		req.CustomAgent.ID,
+		workflowRunTriggerSource(req),
+		req.Session.ID,
+		req.AssistantMessageID,
+		inputQuery,
+	)
+	executor := &workflowExecutor{
+		ctx:                ctx,
+		runtime:            runtime,
+		config:             agentConfig,
+		model:              summaryModel,
+		rerankModel:        rerankModel,
+		definition:         definition,
+		eventBus:           eventBus,
+		observer:           observer,
+		sessionID:          req.Session.ID,
+		assistantMessage:   req.AssistantMessageID,
+		requestID:          requestID,
+		inputQuery:         inputQuery,
+		semaphore:          make(chan struct{}, workflowruntime.MaxParallelNodes),
+		nodes:              nodes,
+		outgoing:           outgoing,
+		incoming:           incoming,
+		finalAnswerEventID: generateEventID("workflow-answer"),
+	}
+	variables := map[string]interface{}{
+		"input": map[string]interface{}{
+			"query":            inputQuery,
+			"attachments_text": attachmentsText,
+		},
+		"nodes": map[string]interface{}{},
+	}
 
-		startedAt := time.Now()
-		var result workflowPathResult
-		func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					logger.ErrorWithFields(ctx, fmt.Errorf("workflow execution panicked: %v", recovered),
-						map[string]interface{}{
-							"session_id": req.Session.ID,
-							"agent_id":   req.CustomAgent.ID,
-							"run_id":     observer.runID(),
-							"stack":      string(debug.Stack()),
-						})
-					result = workflowPathResult{
-						failures: []types.WorkflowNodeFailure{{
-							NodeID: startID,
-							Error:  "工作流执行时发生内部异常",
-						}},
-					}
+	startedAt := time.Now()
+	var result workflowPathResult
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.ErrorWithFields(ctx, fmt.Errorf("workflow execution panicked: %v", recovered),
+					map[string]interface{}{
+						"session_id": req.Session.ID,
+						"agent_id":   req.CustomAgent.ID,
+						"run_id":     observer.runID(),
+						"stack":      string(debug.Stack()),
+					})
+				result = workflowPathResult{
+					failures: []types.WorkflowNodeFailure{{
+						NodeID: startID,
+						Error:  "工作流执行时发生内部异常",
+					}},
 				}
-			}()
-			result = executor.executePath(startID, variables, "")
-		}()
-		for i := range result.steps {
-			result.steps[i].Iteration = i
-		}
-		result.refs = dedupeWorkflowReferences(result.refs)
-		result.failures = dedupeWorkflowFailures(result.failures)
-		result.handledFailures = dedupeWorkflowFailures(result.handledFailures)
-		canceled := result.canceled || ctx.Err() != nil
-		runStatus := types.ResolveWorkflowRunStatus(result.successEnd, result.failures, canceled)
-
-		finalAnswer := composeWorkflowAnswer(result, runStatus)
-		observer.finish(runStatus, finalAnswer, result.usage, result.failures)
-
-		if len(result.refs) > 0 {
-			if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
-				ID:        generateEventID("workflow-references"),
-				Type:      event.EventAgentReferences,
-				SessionID: req.Session.ID,
-				RequestID: requestID,
-				Data:      event.AgentReferencesData{References: result.refs},
-			}); err != nil {
-				logger.Warnf(ctx, "Failed to emit workflow references: %v", err)
 			}
-		}
-		if runStatus == types.WorkflowRunStatusFailed {
-			emitWorkflowFailureEvent(ctx, eventBus, req, requestID, finalAnswer)
-		} else if runStatus != types.WorkflowRunStatusCanceled {
-			// 取消后不发送缓冲答案：用户已经点了停止，再补一段答案会覆盖新的一轮。
-			emitWorkflowFinalAnswer(ctx, eventBus, req, requestID, executor.finalAnswerEventID, finalAnswer)
-		}
+		}()
+		result = executor.executePath(startID, variables, "")
+	}()
+	for i := range result.steps {
+		result.steps[i].Iteration = i
+	}
+	result.refs = dedupeWorkflowReferences(result.refs)
+	result.failures = dedupeWorkflowFailures(result.failures)
+	result.handledFailures = dedupeWorkflowFailures(result.handledFailures)
+	canceled := result.canceled || ctx.Err() != nil
+	runStatus := types.ResolveWorkflowRunStatus(result.successEnd, result.failures, canceled)
 
-		refs := make([]interface{}, 0, len(result.refs))
-		for _, ref := range result.refs {
-			refs = append(refs, ref)
-		}
-		var usage interface{}
-		if result.usage.TotalTokens > 0 {
-			usageCopy := result.usage
-			usage = &usageCopy
-		}
-		complete := event.Event{
-			ID:        generateEventID("workflow-complete"),
-			Type:      event.EventAgentComplete,
+	finalAnswer := composeWorkflowAnswer(result, runStatus)
+	observer.finish(runStatus, finalAnswer, result.usage, result.failures)
+
+	if len(result.refs) > 0 {
+		if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
+			ID:        generateEventID("workflow-references"),
+			Type:      event.EventAgentReferences,
 			SessionID: req.Session.ID,
 			RequestID: requestID,
-			Data: event.AgentCompleteData{
-				SessionID:       req.Session.ID,
-				TotalSteps:      len(result.steps),
-				FinalAnswer:     finalAnswer,
-				KnowledgeRefs:   refs,
-				AgentSteps:      result.steps,
-				Usage:           usage,
-				TotalDurationMs: time.Since(startedAt).Milliseconds(),
-				MessageID:       req.AssistantMessageID,
-				RequestID:       requestID,
-				Extra:           workflowCompleteExtra(observer.runID(), runStatus, result),
-			},
+			Data:      event.AgentReferencesData{References: result.refs},
+		}); err != nil {
+			logger.Warnf(ctx, "Failed to emit workflow references: %v", err)
 		}
-		if err := eventBus.Emit(context.WithoutCancel(ctx), complete); err != nil {
-			logger.Warnf(ctx, "Failed to emit workflow completion event: %v", err)
-		}
-		return nil
-	*/
+	}
+	if runStatus == types.WorkflowRunStatusFailed {
+		emitWorkflowFailureEvent(ctx, eventBus, req, requestID, finalAnswer)
+	} else if runStatus != types.WorkflowRunStatusCanceled {
+		// 取消后不发送缓冲答案：用户已经点了停止，再补一段答案会覆盖新的一轮。
+		emitWorkflowFinalAnswer(ctx, eventBus, req, requestID, executor.finalAnswerEventID, finalAnswer)
+	}
+
+	refs := make([]interface{}, 0, len(result.refs))
+	for _, ref := range result.refs {
+		refs = append(refs, ref)
+	}
+	var usage interface{}
+	if result.usage.TotalTokens > 0 {
+		usageCopy := result.usage
+		usage = &usageCopy
+	}
+	complete := event.Event{
+		ID:        generateEventID("workflow-complete"),
+		Type:      event.EventAgentComplete,
+		SessionID: req.Session.ID,
+		RequestID: requestID,
+		Data: event.AgentCompleteData{
+			SessionID:       req.Session.ID,
+			TotalSteps:      len(result.steps),
+			FinalAnswer:     finalAnswer,
+			KnowledgeRefs:   refs,
+			AgentSteps:      result.steps,
+			Usage:           usage,
+			TotalDurationMs: time.Since(startedAt).Milliseconds(),
+			MessageID:       req.AssistantMessageID,
+			RequestID:       requestID,
+			Extra:           workflowCompleteExtra(observer.runID(), runStatus, result),
+		},
+	}
+	if err := eventBus.Emit(context.WithoutCancel(ctx), complete); err != nil {
+		logger.Warnf(ctx, "Failed to emit workflow completion event: %v", err)
+	}
+	return nil
 }
 
 // startPersistentWorkflowQA 为正式聊天入口创建绑定发布快照的 durable 运行。

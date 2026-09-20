@@ -61,6 +61,7 @@ func (s *sessionService) AgentQA(
 		logger.Warnf(ctx, "Tenant info not available for agent tenant %d, proceeding with defaults", agentTenantID)
 		tenantInfo = &types.Tenant{ID: agentTenantID}
 	}
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenantInfo)
 
 	// Ensure defaults are set
 	req.CustomAgent.EnsureDefaults()
