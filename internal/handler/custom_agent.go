@@ -994,6 +994,28 @@ func (h *CustomAgentHandler) ValidateWorkflowDefinition(c *gin.Context) {
 		return
 	}
 	config := req.Config
+	if config == nil {
+		c.Error(errors.NewBadRequestError("Config cannot be empty"))
+		return
+	}
+
+	// 若未传 SandboxConfigID 等基础属性，且已存在智能体记录，则从已有记录回填
+	if id != "" && (config.SandboxConfigID == "" || config.ModelID == "") {
+		if existing, err := h.service.GetAgentByID(ctx, id); err == nil && existing != nil {
+			if config.SandboxConfigID == "" {
+				config.SandboxConfigID = existing.Config.SandboxConfigID
+			}
+			if config.ModelID == "" {
+				config.ModelID = existing.Config.ModelID
+			}
+			if config.VLMModelID == "" {
+				config.VLMModelID = existing.Config.VLMModelID
+			}
+			if config.RerankModelID == "" {
+				config.RerankModelID = existing.Config.RerankModelID
+			}
+		}
+	}
 
 	issues, err := h.agentRuntime.ValidateWorkflowDefinition(ctx, config)
 	if err != nil {

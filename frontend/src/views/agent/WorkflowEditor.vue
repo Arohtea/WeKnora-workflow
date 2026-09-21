@@ -3819,12 +3819,13 @@ async function publishDefinition() {
 
 /**
  * 组装发布校验用的配置载荷。
- * 后端 validate 先通过 agent_type 确认配置属于工作流，再校验 workflow 定义；
- * 编辑器只提交校验必需的类型标记和当前画布，其他配置已在发布前保存草稿时落库。
+ * 后端 validate 先通过 agent_type 确认配置属于工作流，再校验 workflow 定义与依赖资源；
+ * 这里必须带上当前的 sandbox_config_id，以便后端正确校验 Skill 节点的沙箱依赖。
  */
 function cloneAgentConfigForPublish(): CustomAgentConfig {
   return {
     agent_type: 'workflow',
+    sandbox_config_id: props.sandboxConfigId || undefined,
     workflow: toDefinition(),
   };
 }
