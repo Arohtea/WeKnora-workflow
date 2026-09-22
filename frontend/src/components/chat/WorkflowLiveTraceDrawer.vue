@@ -35,12 +35,15 @@
         </div>
       </div>
 
-      <!-- 进度指示 -->
+      <!-- 进度指示与视图切换 -->
       <div class="workflow-trace-progress-wrap">
         <div class="workflow-trace-progress-info">
           <span class="workflow-trace-progress-label">节点进度</span>
           <span class="workflow-trace-progress-count">
-            {{ completedCount }} / {{ totalNodesCount }}
+            <span class="count-main">{{ completedCount }} / {{ effectiveTotalCount }}</span>
+            <span v-if="skippedCount > 0 && viewMode === 'all'" class="count-skipped-tip">
+              ({{ skippedCount }} 个分支节点已跳过)
+            </span>
           </span>
         </div>
         <div class="workflow-trace-progress-bar">
@@ -48,6 +51,30 @@
             class="workflow-trace-progress-fill"
             :style="{ width: `${progressPercent}%` }"
           />
+        </div>
+
+        <!-- 视图切换：当存在跳过分支时展示分段控制器，默认「执行路径」 -->
+        <div v-if="skippedCount > 0" class="workflow-trace-filter-wrap">
+          <div class="workflow-trace-segmented">
+            <button
+              type="button"
+              class="segmented-btn"
+              :class="{ 'is-active': viewMode === 'executed' }"
+              @click="viewMode = 'executed'"
+            >
+              <span>执行路径</span>
+              <span class="segmented-badge">{{ executedCount }}</span>
+            </button>
+            <button
+              type="button"
+              class="segmented-btn"
+              :class="{ 'is-active': viewMode === 'all' }"
+              @click="viewMode = 'all'"
+            >
+              <span>完整流程</span>
+              <span class="segmented-badge">{{ allStepsCount }}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -79,11 +106,16 @@
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-              <span v-else class="trace-step-index">{{ index + 1 }}</span>
+              <!-- 分支跳过图标：虚线细圆环配居中线，语义明确且符合 Lucide 标准 -->
+              <svg v-else-if="step.state === 'skipped'" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="8" stroke-dasharray="3 2" opacity="0.8" />
+                <line x1="8.5" y1="12" x2="15.5" y2="12" stroke-width="2.2" />
+              </svg>
+              <span v-else class="trace-step-index">{{ step.displayIndex || (index + 1) }}</span>
             </span>
 
             <!-- 步骤卡片 -->
-            <div class="trace-step-card">
+            <div class="trace-step-card" :title="step.state === 'skipped' ? '该分支未被路由条件命中，未执行' : step.name">
               <div class="trace-step-icon-wrap">
                 <svg v-if="step.type === 'start'" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3" />
@@ -123,6 +155,7 @@
 
               <span v-if="step.state === 'running'" class="trace-step-tag">执行中</span>
               <span v-else-if="step.state === 'failed'" class="trace-step-tag is-failed">失败</span>
+              <span v-else-if="step.state === 'skipped'" class="trace-step-tag is-skipped">已跳过分支</span>
             </div>
           </li>
         </ol>
@@ -144,13 +177,14 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import type { WorkflowDefinition, WorkflowNode, WorkflowNodeType } from '@/api/agent';
 
-type StepState = 'running' | 'success' | 'failed' | 'idle';
+type StepState = 'running' | 'success' | 'failed' | 'idle' | 'skipped';
 
 interface TraceStep {
   id: string;
   name: string;
   type?: WorkflowNodeType;
   state: StepState;
+  displayIndex?: number;
 }
 
 const props = withDefaults(
@@ -178,6 +212,13 @@ const emit = defineEmits<{
 
 const timelineEl = ref<HTMLElement | null>(null);
 
+/**
+ * 视图过滤模式：
+ * - 'executed': 仅展示实际执行路径上的节点（默认，隐藏未进行的分支节点）
+ * - 'all': 展示完整流程图谱中的全部节点（未进行的分支节点带明显虚线淡化与跳过标识）
+ */
+const viewMode = ref<'executed' | 'all'>('executed');
+
 const handleClose = () => {
   emit('update:visible', false);
 };
@@ -189,19 +230,18 @@ const nodeById = computed(() => {
 });
 
 /**
- * 将"执行轨迹 + 工作流定义"归一为一条纵向步骤序列。
- * 已执行节点按事件到达顺序（即真实执行顺序）在前，未执行节点按画布纵向位置补齐，
- * 这样时间线既反映实际推进路径，又保留剩余步骤的推进感。
+ * 全量节点状态归一化列表（包含分支可达性分析）：
+ * - 已执行节点按实际流式事件到达顺序排列在前；
+ * - 若工作流已执行完毕（无 activeNodeId 且已有执行记录或到达 end 节点），所有未执行节点 100% 确定为已跳过的分支 (skipped)；
+ * - 若工作流正在执行中，从 activeNodeId 进行拓扑出边可达性分析：可达节点为排队中 (idle)，不可达节点判定为已跳过分支 (skipped)。
  */
-const steps = computed<TraceStep[]>(() => {
+const allSteps = computed<TraceStep[]>(() => {
   const seen = new Set<string>();
   const list: TraceStep[] = [];
 
   const push = (id: string | null | undefined, state: StepState) => {
     if (!id) return;
     const existing = list.find((step) => step.id === id);
-    // 循环工作流里同一节点会二次执行，此处保留原位置、只刷新状态，
-    // 否则它会被去重成"已完成"，和实际正在运行的状态相矛盾。
     if (existing) {
       existing.state = state;
       return;
@@ -211,16 +251,99 @@ const steps = computed<TraceStep[]>(() => {
     list.push({ id, name: node?.name || id, type: node?.type, state });
   };
 
+  // 1. 先推入真实执行记录与当前正在执行的节点
   props.completedNodeIds.forEach((id) => push(id, 'success'));
   props.failedNodeIds.forEach((id) => push(id, 'failed'));
-  push(props.activeNodeId, 'running');
+  if (props.activeNodeId) {
+    push(props.activeNodeId, 'running');
+  }
 
-  const pending = (props.definition?.nodes || [])
+  // 2. 判断工作流是否已处于终止态
+  const hasReachedEndNode = props.completedNodeIds.some(
+    (id) => nodeById.value.get(id)?.type === 'end'
+  );
+  const isFinished = !props.activeNodeId && (
+    hasReachedEndNode ||
+    props.completedNodeIds.length > 0 ||
+    props.failedNodeIds.length > 0
+  );
+
+  // 3. 构建拓扑出边映射，用于执行中的可达性推导
+  const outgoingEdges = new Map<string, string[]>();
+  (props.definition?.edges || []).forEach((edge) => {
+    if (!outgoingEdges.has(edge.source)) outgoingEdges.set(edge.source, []);
+    outgoingEdges.get(edge.source)!.push(edge.target);
+  });
+
+  const reachableFromActive = new Set<string>();
+  if (props.activeNodeId) {
+    const queue = [props.activeNodeId];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      const targets = outgoingEdges.get(curr) || [];
+      for (const target of targets) {
+        if (!reachableFromActive.has(target) && !seen.has(target)) {
+          reachableFromActive.add(target);
+          queue.push(target);
+        }
+      }
+    }
+  }
+
+  // 4. 处理剩余尚未执行的节点
+  const remainingNodes = (props.definition?.nodes || [])
     .filter((node) => !seen.has(node.id))
     .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
-  pending.forEach((node) => push(node.id, 'idle'));
+
+  remainingNodes.forEach((node) => {
+    let state: StepState = 'idle';
+    if (isFinished) {
+      // 已经执行完成，未跑过的节点全部属于未命中的分支
+      state = 'skipped';
+    } else if (props.activeNodeId) {
+      // 正在执行中，不在活跃节点下游候选链上的节点属于已跳过分支
+      if (!reachableFromActive.has(node.id)) {
+        state = 'skipped';
+      } else {
+        state = 'idle';
+      }
+    }
+    push(node.id, state);
+  });
+
+  // 5. 为真实有效链路上的节点赋予连续递增的序号，跳过节点不占位
+  let effectiveSeq = 1;
+  list.forEach((step) => {
+    if (step.state !== 'skipped') {
+      step.displayIndex = effectiveSeq++;
+    }
+  });
 
   return list;
+});
+
+/** 所有节点总数 */
+const allStepsCount = computed(() => allSteps.value.length);
+
+/** 过滤出本次实际执行路径上的有效节点（剔除未走的分支节点） */
+const executedSteps = computed(() =>
+  allSteps.value.filter((step) => step.state !== 'skipped')
+);
+
+/** 实际执行路径上的节点数 */
+const executedCount = computed(() => executedSteps.value.length);
+
+/** 本次运行被跳过的分支节点总数 */
+const skippedCount = computed(
+  () => allSteps.value.filter((step) => step.state === 'skipped').length
+);
+
+/** 最终渲染的时间线步骤列表（根据视图切换决定是否展示已跳过的分支节点） */
+const steps = computed(() => {
+  if (viewMode.value === 'executed') {
+    return executedSteps.value;
+  }
+  return allSteps.value;
 });
 
 const statusLabel = computed(() => {
@@ -242,15 +365,19 @@ const nodeTypeLabel = (type?: WorkflowNodeType): string => {
   }
 };
 
-const totalNodesCount = computed(() => steps.value.length);
+/**
+ * 真实有效执行路径的总节点数（分母）：
+ * 避免分支工作流中将未激活分支算入总数导致「明明已执行完成但进度只有 6/10」的问题。
+ */
+const effectiveTotalCount = computed(() => executedCount.value);
 
 const completedCount = computed(
-  () => steps.value.filter((step) => step.state === 'success' || step.state === 'failed').length
+  () => executedSteps.value.filter((step) => step.state === 'success' || step.state === 'failed').length
 );
 
 const progressPercent = computed(() => {
-  if (totalNodesCount.value === 0) return 0;
-  return Math.min(100, Math.round((completedCount.value / totalNodesCount.value) * 100));
+  if (effectiveTotalCount.value === 0) return 0;
+  return Math.min(100, Math.round((completedCount.value / effectiveTotalCount.value) * 100));
 });
 
 // 时间线随执行推进，自动把当前节点滚入视野
@@ -408,6 +535,74 @@ watch(
   margin-bottom: 6px;
 }
 
+.count-skipped-tip {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.workflow-trace-filter-wrap {
+  margin-top: 10px;
+}
+
+.workflow-trace-segmented {
+  display: flex;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 2.5px;
+  gap: 2px;
+}
+
+.segmented-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.segmented-btn:hover {
+  color: #0f172a;
+}
+
+.segmented-btn.is-active {
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.segmented-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(148, 163, 184, 0.2);
+  color: #64748b;
+  transition: all 0.2s ease;
+}
+
+.segmented-btn.is-active .segmented-badge {
+  background: rgba(0, 82, 217, 0.1);
+  color: #0052d9;
+}
+
 .workflow-trace-progress-bar {
   height: 4px;
   border-radius: 999px;
@@ -489,6 +684,11 @@ watch(
   background: rgba(239, 68, 68, 0.45);
 }
 
+.trace-step.is-skipped::before {
+  background: transparent;
+  border-left: 2px dashed #cbd5e1;
+}
+
 .trace-step-dot {
   position: absolute;
   left: 0;
@@ -547,6 +747,46 @@ watch(
 }
 
 .trace-step.is-idle .trace-step-name {
+  color: #64748b;
+}
+
+/* 跳过未执行分支：整体弱化透明度，虚线边框与中性灰点缀，层次极其分明 */
+.trace-step.is-skipped {
+  opacity: 0.62;
+  transition: opacity 0.2s ease;
+}
+
+.trace-step.is-skipped:hover {
+  opacity: 0.95;
+}
+
+.trace-step.is-skipped .trace-step-dot {
+  border-color: #cbd5e1;
+  border-style: dashed;
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.trace-step.is-skipped .trace-step-card {
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-left: 3px solid #cbd5e1;
+  box-shadow: none;
+  transition: all 0.2s ease;
+}
+
+.trace-step.is-skipped:hover .trace-step-card {
+  border-color: #94a3b8;
+  border-left-color: #94a3b8;
+  background: #ffffff;
+}
+
+.trace-step.is-skipped .trace-step-icon-wrap {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.trace-step.is-skipped .trace-step-name {
   color: #64748b;
 }
 
@@ -619,6 +859,12 @@ watch(
 .trace-step-tag.is-failed {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.1);
+}
+
+.trace-step-tag.is-skipped {
+  color: #64748b;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
 }
 
 .trace-spin {
