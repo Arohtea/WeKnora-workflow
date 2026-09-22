@@ -113,6 +113,7 @@ func (h *AgentStreamHandler) Subscribe() {
 	// Subscribe to all agent streaming events on the dedicated EventBus
 	h.eventBus.On(event.EventAgentThought, h.handleThought)
 	h.eventBus.On(event.EventAgentToolCall, h.handleToolCall)
+	h.eventBus.On(event.EventAgentToolChunk, h.handleToolChunk)
 	h.eventBus.On(event.EventAgentToolResult, h.handleToolResult)
 	h.eventBus.On(event.EventAgentCommandOutput, h.handleCommandOutput)
 	h.eventBus.On(event.EventAgentReferences, h.handleReferences)
@@ -239,6 +240,31 @@ func (h *AgentStreamHandler) handleToolCall(ctx context.Context, evt event.Event
 	}
 
 	return nil
+}
+
+// handleToolChunk handles streaming chunks from tools/workflow nodes
+func (h *AgentStreamHandler) handleToolChunk(ctx context.Context, evt event.Event) error {
+	data, ok := evt.Data.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	toolCallID, _ := data["tool_call_id"].(string)
+	chunk, _ := data["chunk"].(string)
+	if toolCallID == "" || chunk == "" {
+		return nil
+	}
+
+	return h.streamManager.AppendEvent(h.ctx, h.sessionID, h.assistantMessageID, interfaces.StreamEvent{
+		ID:        evt.ID,
+		Type:      "tool_chunk",
+		Content:   chunk,
+		Done:      false,
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"tool_call_id": toolCallID,
+			"chunk":        chunk,
+		},
+	})
 }
 
 // handleToolResult handles tool result events

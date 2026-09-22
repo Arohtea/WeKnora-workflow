@@ -1,0 +1,266 @@
+{
+  "$schema": "https://weknora.tencent.com/schemas/workflow-v1.json",
+  "version": "1.0",
+  "type": "weknora_workflow",
+  "exported_at": "2026-09-22T11:47:15.000Z",
+  "metadata": {
+    "name": "技术知识库双轨响应工作流（长篇规程 vs 指标快查）",
+    "description": "基于大模型做前置意图分诊：若为成套规范编制，调用 doc-synthesizer 深度合成长文方案；若为指标参数查询，直接提取结构化技术表格精准回答。",
+    "version": 2,
+    "schema_version": 2
+  },
+  "workflow": {
+    "version": 2,
+    "schema_version": 2,
+    "viewport": {
+      "x": 60,
+      "y": 140,
+      "zoom": 0.75
+    },
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "name": "接收提问",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 40,
+          "y": 240
+        },
+        "config": {}
+      },
+      {
+        "id": "decision-task-intent",
+        "type": "llm-decision",
+        "name": "任务诉求分诊",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 280,
+          "y": 240
+        },
+        "config": {
+          "prompt": "请评估用户提问的诉求类型：\n{{input.query}}\n\n仅从以下两个候选标签中选择一个返回：\n如果用户要求编写完整方案、成套检测规程、技术规格书等长篇体系化文档，返回【成套规范编制】；\n如果用户主要是查询特定数值、试验参数、设备指标、术语定义或简短问答，返回【指标参数快查】。",
+          "choices": [
+            "成套规范编制",
+            "指标参数快查"
+          ]
+        }
+      },
+      {
+        "id": "llm-extract-doc-kw",
+        "type": "llm",
+        "name": "提取规程核心词",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 580,
+          "y": 120
+        },
+        "config": {
+          "system_prompt": "你是一个专业的检索关键词提取助手。",
+          "prompt": "用户需要编制完整技术规程：{{input.query}}\n\n请提炼 3-5 个涵盖试验原理、方法名称、关键工序与检测标准的核心检索词，用空格分隔，严禁多余文字。",
+          "temperature": 0.3
+        }
+      },
+      {
+        "id": "retrieval-doc",
+        "type": "knowledge-retrieval",
+        "name": "检索全套规范库",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 860,
+          "y": 120
+        },
+        "config": {
+          "top_k": 8,
+          "query_template": "{{nodes.llm-extract-doc-kw.text}}",
+          "knowledge_base_ids": [
+            "2e4fd4f8-4ad2-47b1-8398-4aeab84ca6e0"
+          ]
+        }
+      },
+      {
+        "id": "tool-doc-synthesizer",
+        "type": "tool",
+        "name": "规范文档深度合成",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1140,
+          "y": 120
+        },
+        "config": {
+          "kind": "skill",
+          "arguments": {},
+          "tool_name": "",
+          "skill_name": "doc-synthesizer",
+          "task_template": "用户提问：\n{{input.query}}\n\n知识库检索到的参考资料：\n{{nodes.retrieval-doc.text}}\n\n【禁止输出】系统和沙盒内部的链接，比如resource://和skill://开头的链接\n请基于以上检索到的资料，结合用户的提问，整理并生成一份结构完整的成套技术规范文档。"
+        }
+      },
+      {
+        "id": "end-doc",
+        "type": "end",
+        "name": "输出成套规范方案",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1440,
+          "y": 120
+        },
+        "config": {
+          "text_template": "{{nodes.tool-doc-synthesizer.text}}"
+        }
+      },
+      {
+        "id": "llm-extract-param-kw",
+        "type": "llm",
+        "name": "提取参数关键词",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 580,
+          "y": 360
+        },
+        "config": {
+          "system_prompt": "你是一个精准的技术参数关键词提炼助手。",
+          "prompt": "用户查询具体参数或指标：{{input.query}}\n\n请提取 2-3 个最精准的参数名词与设备名称，用空格分隔直接输出。",
+          "temperature": 0.2
+        }
+      },
+      {
+        "id": "retrieval-param",
+        "type": "knowledge-retrieval",
+        "name": "定向检索参数片段",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 860,
+          "y": 360
+        },
+        "config": {
+          "top_k": 4,
+          "query_template": "{{nodes.llm-extract-param-kw.text}}",
+          "knowledge_base_ids": [
+            "2e4fd4f8-4ad2-47b1-8398-4aeab84ca6e0"
+          ]
+        }
+      },
+      {
+        "id": "llm-table-summary",
+        "type": "llm",
+        "name": "结构化表格提炼",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1140,
+          "y": 360
+        },
+        "config": {
+          "system_prompt": "你是一名精通工程技术标准的技术支持专家。",
+          "prompt": "用户问题：{{input.query}}\n\n参考资料片段：\n{{nodes.retrieval-param.text}}\n\n请根据参考资料，对用户关心的指标或参数进行精准回答：\n1. 用简洁的 Markdown 表格列出核心指标名称、规定数值、容许偏差及对应标准条款；\n2. 如有操作注意事项，在表格下方用 2-3 点要点注明；\n3. 严禁编造任何未在参考资料中出现的数值。",
+          "temperature": 0.3
+        }
+      },
+      {
+        "id": "end-param",
+        "type": "end",
+        "name": "输出指标速查结果",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1440,
+          "y": 360
+        },
+        "config": {
+          "text_template": "### 📋 技术指标与参数速查\n\n{{nodes.llm-table-summary.text}}"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-start-to-decision",
+        "source": "start",
+        "target": "decision-task-intent",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      },
+      {
+        "id": "edge-decision-to-doc",
+        "source": "decision-task-intent",
+        "target": "llm-extract-doc-kw",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "nodes.decision-task-intent.data.choice",
+              "operator": "eq",
+              "value": "成套规范编制"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-doc-kw-to-retrieval",
+        "source": "llm-extract-doc-kw",
+        "target": "retrieval-doc",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      },
+      {
+        "id": "edge-retrieval-to-synthesizer",
+        "source": "retrieval-doc",
+        "target": "tool-doc-synthesizer",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      },
+      {
+        "id": "edge-synthesizer-to-end",
+        "source": "tool-doc-synthesizer",
+        "target": "end-doc",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      },
+      {
+        "id": "edge-decision-to-param",
+        "source": "decision-task-intent",
+        "target": "llm-extract-param-kw",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 1,
+        "is_default": true
+      },
+      {
+        "id": "edge-param-kw-to-retrieval",
+        "source": "llm-extract-param-kw",
+        "target": "retrieval-param",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      },
+      {
+        "id": "edge-retrieval-to-table",
+        "source": "retrieval-param",
+        "target": "llm-table-summary",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      },
+      {
+        "id": "edge-table-to-end",
+        "source": "llm-table-summary",
+        "target": "end-param",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": true
+      }
+    ]
+  }
+}

@@ -354,12 +354,14 @@ func (s *agentService) ExecuteWorkflowMCPTool(
 // @param task 传给 Skill 小智能体的任务。
 // @param sessionID 当前会话 ID。
 // @param assistantMessageID 当前助手消息 ID。
+// @param eventBus 父级事件总线，用于实时展示调用过程与命令输出。
 // @returns Skill 小智能体状态以及执行错误。
 func (s *agentService) ExecuteWorkflowSkill(
 	ctx context.Context,
 	parentConfig *types.AgentConfig,
 	chatModel chat.Chat,
 	skillName, task, sessionID, assistantMessageID string,
+	eventBus *event.EventBus,
 ) (*types.AgentState, error) {
 	if parentConfig == nil {
 		return nil, fmt.Errorf("workflow agent config is required")
@@ -388,6 +390,24 @@ func (s *agentService) ExecuteWorkflowSkill(
 	child.SystemPrompt = "你是工作流中的受限 Skill 执行器。只完成给定任务，只使用当前指定 Skill、read_file 和 shell_exec。若技能需要生成交付文件，请确保执行构建或导出命令将成品文件输出到 /workspace/output 目录。不要调用其他工具，不要修改工作流路由，不要编造未读取到的结果。完成后直接返回简洁结果。"
 
 	subBus := event.NewEventBus()
+	if eventBus != nil {
+		forwardTypes := []event.EventType{
+			event.EventAgentThought,
+			event.EventAgentCommandOutput,
+			event.EventAgentToolCall,
+			event.EventAgentToolResult,
+			event.EventAgentStep,
+		}
+		for _, et := range forwardTypes {
+			t := et
+			subBus.On(t, func(c context.Context, evt event.Event) error {
+				return eventBus.Emit(c, evt)
+			})
+		}
+		eventBus.On(event.EventStop, func(c context.Context, evt event.Event) error {
+			return subBus.Emit(c, evt)
+		})
+	}
 	engine, err := s.CreateAgentEngine(
 		ctx, &child, chatModel, nil, subBus, sessionID, assistantMessageID,
 	)

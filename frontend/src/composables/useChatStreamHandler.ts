@@ -832,6 +832,21 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
         }
         break
       }
+      case 'tool_chunk': {
+        const toolCallId = String(dataPayload?.tool_call_id || data.id || '')
+        const chunk = String(dataPayload?.chunk || data.content || '')
+        if (toolCallId && chunk) {
+          const stream = message.agentEventStream as ChatMessage[] | undefined
+          let tool = stream?.find(event => event.type === 'tool_call' && event.tool_call_id === toolCallId)
+          if (!tool && message._pendingToolCalls) {
+            tool = (message._pendingToolCalls as Map<string, ChatMessage>).get(toolCallId)
+          }
+          if (tool) {
+            tool.output = String(tool.output || '') + chunk
+          }
+        }
+        break
+      }
       case 'tool_result':
       case 'error': {
         if (dataPayload) {
@@ -1143,6 +1158,7 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
     const isAgentOnlyResponse =
       data.response_type === 'thinking' ||
       data.response_type === 'tool_call' ||
+      data.response_type === 'tool_chunk' ||
       data.response_type === 'tool_result' ||
       data.response_type === 'command_output' ||
       data.response_type === 'reflection' ||

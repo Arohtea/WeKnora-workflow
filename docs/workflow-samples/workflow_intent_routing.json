@@ -1,0 +1,220 @@
+{
+  "$schema": "https://weknora.tencent.com/schemas/workflow-v1.json",
+  "version": "1.0",
+  "type": "weknora_workflow",
+  "exported_at": "2026-09-22T11:35:00.000Z",
+  "metadata": {
+    "name": "智能客服与故障自愈工作流",
+    "description": "基于大模型意图分类，动态分流紧急系统故障排查、业务功能咨询与客户投诉工单登记。",
+    "version": 2,
+    "schema_version": 2
+  },
+  "workflow": {
+    "version": 2,
+    "schema_version": 2,
+    "viewport": {
+      "x": 0,
+      "y": 0,
+      "zoom": 1
+    },
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "name": "接收提问",
+        "position": {
+          "x": 60,
+          "y": 240
+        },
+        "config": {}
+      },
+      {
+        "id": "decision-intent",
+        "type": "llm-decision",
+        "name": "意图与紧急度识别",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 320,
+          "y": 240
+        },
+        "config": {
+          "prompt": "请严格评估用户的提问，判断其属于哪一类业务意图，仅从候选标签中选择一个最匹配的返回：\n{{input.query}}",
+          "choices": [
+            "系统故障排查",
+            "业务功能咨询",
+            "投诉工单登记"
+          ]
+        }
+      },
+      {
+        "id": "http-check-service",
+        "type": "http-request",
+        "name": "排查服务健康状态",
+        "position": {
+          "x": 660,
+          "y": 80
+        },
+        "config": {
+          "method": "GET",
+          "url": "https://httpbin.org/status/200",
+          "headers": {
+            "Accept": "application/json"
+          }
+        }
+      },
+      {
+        "id": "llm-fault-analysis",
+        "type": "llm",
+        "name": "故障分析与应急方案",
+        "position": {
+          "x": 980,
+          "y": 80
+        },
+        "config": {
+          "prompt": "用户报告了系统故障：\n{{input.query}}\n\n服务探测接口返回状态码为：{{nodes.http-check-service.data.status_code}}\n探测响应内容：\n{{nodes.http-check-service.text}}\n\n请输出安抚客户的排查分析，并给出应急处置建议。",
+          "temperature": 0.3
+        }
+      },
+      {
+        "id": "end-fault",
+        "type": "end",
+        "name": "输出故障回复",
+        "position": {
+          "x": 1300,
+          "y": 80
+        },
+        "config": {
+          "text_template": "【系统故障应急排查反馈】\n{{nodes.llm-fault-analysis.text}}"
+        }
+      },
+      {
+        "id": "llm-faq-answer",
+        "type": "llm",
+        "name": "业务功能专业解答",
+        "position": {
+          "x": 660,
+          "y": 260
+        },
+        "config": {
+          "prompt": "你是一名专业业务顾问，请针对用户的使用疑问给出清晰、详尽、步骤化的解答：\n{{input.query}}",
+          "temperature": 0.7
+        }
+      },
+      {
+        "id": "end-faq",
+        "type": "end",
+        "name": "输出业务解答",
+        "position": {
+          "x": 980,
+          "y": 260
+        },
+        "config": {
+          "text_template": "【客服专员解答】\n{{nodes.llm-faq-answer.text}}"
+        }
+      },
+      {
+        "id": "llm-ticket-log",
+        "type": "llm",
+        "name": "工单登记与安抚",
+        "position": {
+          "x": 660,
+          "y": 440
+        },
+        "config": {
+          "prompt": "用户提出了投诉或改进建议：\n{{input.query}}\n请诚恳向客户致歉，承诺专人 24 小时内核实，并以工单格式总结客诉要点。",
+          "temperature": 0.5
+        }
+      },
+      {
+        "id": "end-ticket",
+        "type": "end",
+        "name": "输出工单回复",
+        "position": {
+          "x": 980,
+          "y": 440
+        },
+        "config": {
+          "text_template": "【客户投诉工单跟进通知】\n{{nodes.llm-ticket-log.text}}"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-start-to-decision",
+        "source": "start",
+        "target": "decision-intent",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-decision-to-fault",
+        "source": "decision-intent",
+        "target": "http-check-service",
+        "order": 0,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "nodes.decision-intent.data.choice",
+              "operator": "eq",
+              "value": "系统故障排查"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-fault-http-to-llm",
+        "source": "http-check-service",
+        "target": "llm-fault-analysis",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-fault-llm-to-end",
+        "source": "llm-fault-analysis",
+        "target": "end-fault",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-decision-to-faq",
+        "source": "decision-intent",
+        "target": "llm-faq-answer",
+        "order": 1,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "nodes.decision-intent.data.choice",
+              "operator": "eq",
+              "value": "业务功能咨询"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-faq-to-end",
+        "source": "llm-faq-answer",
+        "target": "end-faq",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-decision-to-ticket",
+        "source": "decision-intent",
+        "target": "llm-ticket-log",
+        "order": 2,
+        "is_default": true
+      },
+      {
+        "id": "edge-ticket-to-end",
+        "source": "llm-ticket-log",
+        "target": "end-ticket",
+        "order": 0,
+        "is_default": false
+      }
+    ]
+  }
+}

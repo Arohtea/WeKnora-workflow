@@ -251,6 +251,10 @@ func (e *AgentEngine) executeToolCalls(
 	}
 
 	for i, tc := range response.ToolCalls {
+		if ctx.Err() != nil {
+			logger.Warnf(ctx, "[Agent][Round-%d] Skipping remaining tool calls due to context cancellation: %v", round, ctx.Err())
+			break
+		}
 		e.executeSingleToolCall(ctx, tc, i, step, iteration, round, sessionID, assistantMessageID)
 	}
 }

@@ -1,0 +1,193 @@
+{
+  "$schema": "https://weknora.tencent.com/schemas/workflow-v1.json",
+  "version": "1.0",
+  "type": "weknora_workflow",
+  "exported_at": "2026-09-22T11:35:15.000Z",
+  "metadata": {
+    "name": "联网检索与双速报告生成工作流",
+    "description": "联网抓取最新动态，大模型评估信息密度，自动流转至生成精简速报或结合外部框架撰写产业深度研报。",
+    "version": 2,
+    "schema_version": 2
+  },
+  "workflow": {
+    "version": 2,
+    "schema_version": 2,
+    "viewport": {
+      "x": 0,
+      "y": 0,
+      "zoom": 1
+    },
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "name": "接收研究课题",
+        "position": {
+          "x": 60,
+          "y": 220
+        },
+        "config": {}
+      },
+      {
+        "id": "tool-web-search",
+        "type": "tool",
+        "name": "联网搜索资讯",
+        "position": {
+          "x": 300,
+          "y": 220
+        },
+        "config": {
+          "kind": "builtin",
+          "tool_name": "web_search",
+          "arguments": {
+            "query": "{{input.query}}"
+          }
+        }
+      },
+      {
+        "id": "decision-depth",
+        "type": "llm-decision",
+        "name": "评估信息深度",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 580,
+          "y": 220
+        },
+        "config": {
+          "prompt": "基于用户研究课题【{{input.query}}】与互联网检索结果：\n{{nodes.tool-web-search.text}}\n\n请评估信息广度与用户意图，仅从以下两个候选标签中选择一个返回：\n如果用户主要需要快速要闻了解或事实核查，返回【输出精炼简报】；如果用户需要完整产业结构、前瞻预测与多维洞察，返回【展开深度研报】。",
+          "choices": [
+            "输出精炼简报",
+            "展开深度研报"
+          ]
+        }
+      },
+      {
+        "id": "llm-brief-summary",
+        "type": "llm",
+        "name": "生成要闻速报",
+        "position": {
+          "x": 900,
+          "y": 100
+        },
+        "config": {
+          "prompt": "请根据课题【{{input.query}}】与互联网检索素材：\n{{nodes.tool-web-search.text}}\n\n撰写一份 300 字以内的精炼行业要闻速报，提炼 3-5 条关键事实与核心动态。",
+          "temperature": 0.4
+        }
+      },
+      {
+        "id": "end-brief",
+        "type": "end",
+        "name": "输出精炼速报",
+        "position": {
+          "x": 1200,
+          "y": 100
+        },
+        "config": {
+          "text_template": "### ⚡ 行业要闻速报\n\n{{nodes.llm-brief-summary.text}}\n\n> 检索数据源于实时互联网公开信息。"
+        }
+      },
+      {
+        "id": "http-fetch-framework",
+        "type": "http-request",
+        "name": "获取外部行业基准",
+        "position": {
+          "x": 900,
+          "y": 340
+        },
+        "config": {
+          "method": "GET",
+          "url": "https://httpbin.org/json",
+          "headers": {
+            "Accept": "application/json"
+          }
+        }
+      },
+      {
+        "id": "llm-deep-report",
+        "type": "llm",
+        "name": "撰写产业深度研报",
+        "position": {
+          "x": 1200,
+          "y": 340
+        },
+        "config": {
+          "prompt": "用户课题：{{input.query}}\n\n联网检索材料：\n{{nodes.tool-web-search.text}}\n\n行业基准数据参考：\n{{nodes.http-fetch-framework.text}}\n\n请撰写一份结构化宏观产业深度研究报告，包含：\n1. 行业背景与现状概览\n2. 核心驱动力与技术突破点\n3. 潜在风险与市场挑战\n4. 未来三年发展趋势研判与落地建议。",
+          "temperature": 0.6
+        }
+      },
+      {
+        "id": "end-deep",
+        "type": "end",
+        "name": "输出深度研报",
+        "position": {
+          "x": 1500,
+          "y": 340
+        },
+        "config": {
+          "text_template": "### 📊 产业宏观深度研究报告\n\n{{nodes.llm-deep-report.text}}"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-start-to-search",
+        "source": "start",
+        "target": "tool-web-search",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-search-to-decision",
+        "source": "tool-web-search",
+        "target": "decision-depth",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-decision-to-brief",
+        "source": "decision-depth",
+        "target": "llm-brief-summary",
+        "order": 0,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "nodes.decision-depth.data.choice",
+              "operator": "eq",
+              "value": "输出精炼简报"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-brief-to-end",
+        "source": "llm-brief-summary",
+        "target": "end-brief",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-decision-to-http",
+        "source": "decision-depth",
+        "target": "http-fetch-framework",
+        "order": 1,
+        "is_default": true
+      },
+      {
+        "id": "edge-http-to-deep",
+        "source": "http-fetch-framework",
+        "target": "llm-deep-report",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-deep-to-end",
+        "source": "llm-deep-report",
+        "target": "end-deep",
+        "order": 0,
+        "is_default": false
+      }
+    ]
+  }
+}

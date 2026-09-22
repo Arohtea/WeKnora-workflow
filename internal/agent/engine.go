@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -512,10 +513,10 @@ loop:
 		case <-ctx.Done():
 			logger.Warnf(ctx, "[Agent] Context cancelled at round %d: %v",
 				state.CurrentRound+1, ctx.Err())
-			// Try to salvage existing results
-			if totalTC := countTotalToolCalls(state.RoundSteps); totalTC > 0 {
+			// 用户主动停止生成时，直接退出，不合成最终答案，避免继续调用模型消耗资源
+			if !errors.Is(ctx.Err(), context.Canceled) && countTotalToolCalls(state.RoundSteps) > 0 {
 				logger.Infof(ctx, "[Agent] Synthesizing final answer from %d existing tool results",
-					totalTC)
+					countTotalToolCalls(state.RoundSteps))
 				_ = e.streamFinalAnswerToEventBus(ctx, query, state, sessionID, messages)
 				state.IsComplete = true
 			}

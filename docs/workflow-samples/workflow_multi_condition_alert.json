@@ -1,0 +1,207 @@
+{
+  "$schema": "https://weknora.tencent.com/schemas/workflow-v1.json",
+  "version": "1.0",
+  "type": "weknora_workflow",
+  "exported_at": "2026-09-22T11:35:30.000Z",
+  "metadata": {
+    "name": "运维告警与复合条件分流工作流",
+    "description": "测试复合判断规则（AND/OR 与 contains 操作符）、HTTP Webhook 自动发送与兜底分支。",
+    "version": 2,
+    "schema_version": 2
+  },
+  "workflow": {
+    "version": 2,
+    "schema_version": 2,
+    "viewport": {
+      "x": 0,
+      "y": 0,
+      "zoom": 1
+    },
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "name": "接收监控事件",
+        "position": {
+          "x": 60,
+          "y": 260
+        },
+        "config": {}
+      },
+      {
+        "id": "llm-extract-payload",
+        "type": "llm",
+        "name": "提取告警指标与级别",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 320,
+          "y": 260
+        },
+        "config": {
+          "prompt": "请提取下列告警或运维文本中的核心故障级别、发生服务和具体指标现象：\n{{input.query}}\n按简洁列表整理。",
+          "temperature": 0.2
+        }
+      },
+      {
+        "id": "http-trigger-alert",
+        "type": "http-request",
+        "name": "推送紧急告警通知",
+        "position": {
+          "x": 660,
+          "y": 80
+        },
+        "config": {
+          "method": "POST",
+          "url": "https://httpbin.org/post",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body_template": "{\"level\": \"CRITICAL\", \"query\": \"{{input.query}}\", \"summary\": \"{{nodes.llm-extract-payload.text}}\"}"
+        }
+      },
+      {
+        "id": "end-alert",
+        "type": "end",
+        "name": "输出告警状态",
+        "position": {
+          "x": 980,
+          "y": 80
+        },
+        "config": {
+          "text_template": "🚨 【已触发 P0 级运维告警推单】\nWebhook 状态码：{{nodes.http-trigger-alert.data.status_code}}\n\n指标摘要：\n{{nodes.llm-extract-payload.text}}"
+        }
+      },
+      {
+        "id": "llm-generate-guide",
+        "type": "llm",
+        "name": "生成排查自查指南",
+        "position": {
+          "x": 660,
+          "y": 260
+        },
+        "config": {
+          "prompt": "用户咨询了常规运维帮助或操作指引：\n{{input.query}}\n请提供清晰的标准操作自查指南与应急排查 Checklist。",
+          "temperature": 0.5
+        }
+      },
+      {
+        "id": "end-guide",
+        "type": "end",
+        "name": "输出指南文档",
+        "position": {
+          "x": 980,
+          "y": 260
+        },
+        "config": {
+          "text_template": "📘 【运维自查指南与操作规程】\n\n{{nodes.llm-generate-guide.text}}"
+        }
+      },
+      {
+        "id": "llm-general-reply",
+        "type": "llm",
+        "name": "常规日志归档",
+        "position": {
+          "x": 660,
+          "y": 440
+        },
+        "config": {
+          "prompt": "针对以下常规输入进行系统性记录与温和反馈：\n{{input.query}}",
+          "temperature": 0.7
+        }
+      },
+      {
+        "id": "end-general",
+        "type": "end",
+        "name": "输出常规应答",
+        "position": {
+          "x": 980,
+          "y": 440
+        },
+        "config": {
+          "text_template": "ℹ️ 【系统处理记录】\n{{nodes.llm-general-reply.text}}"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-start-to-extract",
+        "source": "start",
+        "target": "llm-extract-payload",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-extract-to-alert",
+        "source": "llm-extract-payload",
+        "target": "http-trigger-alert",
+        "order": 0,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "input.query",
+              "operator": "contains",
+              "value": "紧急"
+            },
+            {
+              "variable": "input.query",
+              "operator": "contains",
+              "value": "故障"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-alert-to-end",
+        "source": "http-trigger-alert",
+        "target": "end-alert",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-extract-to-guide",
+        "source": "llm-extract-payload",
+        "target": "llm-generate-guide",
+        "order": 1,
+        "is_default": false,
+        "condition": {
+          "mode": "any",
+          "items": [
+            {
+              "variable": "input.query",
+              "operator": "contains",
+              "value": "指南"
+            },
+            {
+              "variable": "input.query",
+              "operator": "contains",
+              "value": "帮助"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-guide-to-end",
+        "source": "llm-generate-guide",
+        "target": "end-guide",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-extract-to-general",
+        "source": "llm-extract-payload",
+        "target": "llm-general-reply",
+        "order": 2,
+        "is_default": true
+      },
+      {
+        "id": "edge-general-to-end",
+        "source": "llm-general-reply",
+        "target": "end-general",
+        "order": 0,
+        "is_default": false
+      }
+    ]
+  }
+}

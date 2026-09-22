@@ -214,10 +214,11 @@
                     <div class="results-summary-text" v-html="getAttachmentParsingSummary(event)"></div>
                   </div>
 
-                  <!-- 工作流节点：output 直接内联展示，无需点击 -->
-                  <div v-if="!event.pending && (event.is_workflow || event.tool_name?.startsWith('workflow.')) && event.output"
+                  <!-- 工作流节点：output 直接内联展示，无需点击；运行中实时流式渲染 -->
+                  <div v-if="(event.is_workflow || event.tool_name?.startsWith('workflow.')) && event.output"
                     class="action-details workflow-node-output">
                     <div class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
+                    <span v-if="event.pending" class="workflow-typing-cursor" aria-hidden="true"></span>
                   </div>
 
                   <!-- 其他工具：点击展开 -->
@@ -517,10 +518,11 @@
                   <div class="results-summary-text" v-html="getAttachmentParsingSummary(event)"></div>
                 </div>
 
-                <!-- 工作流节点：output 直接内联展示，无需点击 -->
-                <div v-if="!event.pending && (event.is_workflow || event.tool_name?.startsWith('workflow.')) && event.output"
+                <!-- 工作流节点：output 直接内联展示，支持流式实时显示（无需等待 pending 结束） -->
+                <div v-if="(event.is_workflow || event.tool_name?.startsWith('workflow.')) && event.output"
                   class="action-details workflow-node-output">
                   <div class="detail-output markdown-content" v-html="renderMarkdownContent(event.output)"></div>
+                  <span v-if="event.pending" class="workflow-typing-cursor"></span>
                 </div>
 
                 <!-- 其他工具：点击展开 -->
@@ -3753,6 +3755,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
   // 工作流节点输出内联区域：轻量柔和的引用块风格
   &.workflow-node-output {
+    position: relative;
     margin-top: 6px;
     padding: 8px 10px;
     border-radius: 6px;
@@ -3760,12 +3763,32 @@ const handleAddToKnowledge = (answerEvent: any) => {
     border-left: 2px solid var(--td-brand-color-light-5, #bdd2fa);
 
     .detail-output {
+      display: inline;
       font-size: 13px;
       line-height: 1.65;
       color: var(--td-text-color-secondary);
       max-height: 240px;
       overflow-y: auto;
     }
+
+    .workflow-typing-cursor {
+      display: inline-block;
+      width: 2px;
+      height: 13px;
+      margin-left: 3px;
+      vertical-align: -1px;
+      background-color: var(--td-brand-color, #0052d9);
+      animation: workflow-cursor-blink 0.9s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  }
+}
+
+@keyframes workflow-cursor-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
   }
 }
 

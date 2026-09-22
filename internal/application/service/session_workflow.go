@@ -51,6 +51,7 @@ type workflowAgentRuntime interface {
 		parentConfig *types.AgentConfig,
 		chatModel chat.Chat,
 		skillName, task, sessionID, assistantMessageID string,
+		eventBus *event.EventBus,
 	) (*types.AgentState, error)
 }
 
@@ -602,11 +603,10 @@ func emitWorkflowFailureEvent(
 	}
 }
 
-// emitWorkflowFinalAnswer 一次性发送聚合后的最终答案。
+// emitWorkflowFinalAnswer 以平滑的打字机流式分片发送聚合后的最终答案。
 //
-// 旧实现边算边流式分片，同一个 end 节点被重复访问或多分支并行时会交错输出，
-// 用户看到的是拼接乱序的答案。现在节点只做缓冲，答案在这里按分支顺序聚合后
-// 只发一次，Done:true 仍沿用原有收尾语义。
+// 节点在执行期间进行内容缓冲以防止多并行分支乱序，在此按分支聚合后以自然分片
+// 快速流式推送给前端，兼顾并发确定的答案结构与自然的打字机流式体验。
 //
 // @param ctx 当前问答上下文。
 // @param eventBus 当前请求的事件总线。
@@ -623,14 +623,45 @@ func emitWorkflowFinalAnswer(
 	if strings.TrimSpace(answer) == "" {
 		return
 	}
-	if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
-		ID:        eventID,
-		Type:      event.EventAgentFinalAnswer,
-		SessionID: req.Session.ID,
-		RequestID: requestID,
-		Data:      event.AgentFinalAnswerData{Content: answer, Done: true},
-	}); err != nil {
-		logger.Warnf(ctx, "Failed to emit workflow final answer: %v", err)
+	runes := []rune(answer)
+	if len(runes) <= 40 {
+		if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
+			ID:        eventID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: req.Session.ID,
+			RequestID: requestID,
+			Data:      event.AgentFinalAnswerData{Content: answer, Done: true},
+		}); err != nil {
+			logger.Warnf(ctx, "Failed to emit workflow final answer: %v", err)
+		}
+		return
+	}
+
+	chunkSize := 24
+	for i := 0; i < len(runes); i += chunkSize {
+		if ctx.Err() != nil {
+			return
+		}
+		end := i + chunkSize
+		done := false
+		if end >= len(runes) {
+			end = len(runes)
+			done = true
+		}
+		chunk := string(runes[i:end])
+		if err := eventBus.Emit(context.WithoutCancel(ctx), event.Event{
+			ID:        eventID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: req.Session.ID,
+			RequestID: requestID,
+			Data:      event.AgentFinalAnswerData{Content: chunk, Done: done},
+		}); err != nil {
+			logger.Warnf(ctx, "Failed to emit workflow final answer chunk: %v", err)
+			return
+		}
+		if !done {
+			time.Sleep(15 * time.Millisecond)
+		}
 	}
 }
 
@@ -660,6 +691,81 @@ func (s *sessionService) stageWorkflowAttachments(
 	)
 }
 
+func truncateWorkflowRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "…"
+}
+
+func (e *workflowExecutor) buildNodeCallPreviewArgs(
+	node types.WorkflowNode, variables map[string]interface{},
+) map[string]interface{} {
+	args := map[string]interface{}{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+		"node_name": node.Name,
+	}
+	switch node.Type {
+	case types.WorkflowNodeTypeRetrieval:
+		var cfg types.WorkflowRetrievalNodeConfig
+		if err := json.Unmarshal(node.Config, &cfg); err == nil {
+			query := cfg.QueryTemplate
+			if strings.TrimSpace(query) == "" {
+				query = "{{input.query}}"
+			}
+			if rendered, err := workflowruntime.RenderTemplate(query, variables); err == nil {
+				args["query"] = rendered
+			}
+			args["knowledge_base_ids"] = cfg.KnowledgeBaseIDs
+		}
+	case types.WorkflowNodeTypeLLM:
+		var cfg types.WorkflowLLMNodeConfig
+		if err := json.Unmarshal(node.Config, &cfg); err == nil {
+			if rendered, err := workflowruntime.RenderTemplate(cfg.Prompt, variables); err == nil {
+				args["prompt"] = truncateWorkflowRunes(rendered, 200)
+			}
+		}
+	case types.WorkflowNodeTypeLLMDecision:
+		var cfg types.WorkflowLLMDecisionNodeConfig
+		if err := json.Unmarshal(node.Config, &cfg); err == nil {
+			if rendered, err := workflowruntime.RenderTemplate(cfg.Prompt, variables); err == nil {
+				args["prompt"] = truncateWorkflowRunes(rendered, 200)
+			}
+			args["choices"] = cfg.Choices
+		}
+	case types.WorkflowNodeTypeTool:
+		var cfg types.WorkflowToolNodeConfig
+		if err := json.Unmarshal(node.Config, &cfg); err == nil {
+			args["kind"] = cfg.Kind
+			if cfg.ToolName != "" {
+				args["tool_name"] = cfg.ToolName
+			}
+			if cfg.SkillName != "" {
+				args["skill_name"] = cfg.SkillName
+			}
+			if cfg.TaskTemplate != "" {
+				if rendered, err := workflowruntime.RenderTemplate(cfg.TaskTemplate, variables); err == nil {
+					args["task"] = truncateWorkflowRunes(rendered, 200)
+				}
+			}
+		}
+	case types.WorkflowNodeTypeHTTP:
+		var cfg types.WorkflowHTTPNodeConfig
+		if err := json.Unmarshal(node.Config, &cfg); err == nil {
+			if rendered, err := workflowruntime.RenderTemplate(cfg.URL, variables); err == nil {
+				args["url"] = rendered
+			}
+			args["method"] = cfg.Method
+		}
+	}
+	return args
+}
+
 // executePath 从指定节点开始同步执行一条分支。
 //
 // @param nodeID 本次执行的起始节点 ID。
@@ -681,7 +787,7 @@ func (e *workflowExecutor) executePath(
 	iteration := e.nextIteration()
 	callID := "workflow-" + uuid.NewString()
 	toolName := types.WorkflowToolCallPrefix + node.ID
-	callArgs := map[string]interface{}{"node_id": node.ID, "node_type": node.Type}
+	callArgs := e.buildNodeCallPreviewArgs(node, variables)
 	e.emitNodeCall(node, toolName, callID, callArgs, iteration)
 
 	// 运行已取消时尚未调度的节点直接标记 skipped，不再占用并行度；
@@ -714,9 +820,9 @@ func (e *workflowExecutor) executePath(
 			execution.result.Error = execErr.Error()
 		}
 	}
-	if callCtx.Err() != nil && execErr != nil {
-		// 上下文取消会以任意错误形态浮上来（net/http、模型 SDK 各不相同），
-		// 用执行上下文的最终状态判定，避免把取消报成节点失败。
+	if callCtx.Err() != nil || e.ctx.Err() != nil {
+		// 上下文已取消（用户主动停止生成或超时），必须立即中止该分支，
+		// 严禁作为普通失败走条件重试或下游边，避免停止后后台还在继续使用工具。
 		e.observer.nodeFinished(nodeExecution, types.WorkflowNodeStatusCanceled, "", execution.usage, "", "")
 		return workflowPathResult{canceled: true}
 	}
@@ -950,6 +1056,10 @@ func (e *workflowExecutor) runBranches(
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
+			if e.ctx.Err() != nil {
+				children[index] = workflowPathResult{canceled: true}
+				return
+			}
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					target := e.nodes[edge.Target]
@@ -1102,7 +1212,7 @@ func (e *workflowExecutor) executeNode(
 	case types.WorkflowNodeTypeRetrieval:
 		return e.executeRetrieval(ctx, node, variables)
 	case types.WorkflowNodeTypeLLM:
-		return e.executeLLM(ctx, node, variables)
+		return e.executeLLM(ctx, node, variables, toolCallID)
 	case types.WorkflowNodeTypeLLMDecision:
 		return e.executeLLMDecision(ctx, node, variables)
 	case types.WorkflowNodeTypeHTTP:
@@ -1170,16 +1280,16 @@ func (e *workflowExecutor) executeRetrieval(
 
 // executeLLM 执行通用大模型处理节点。
 //
-// 生成内容只做缓冲，不在这里直接推送最终答案事件：工作流可能有多个并行分支
-// 各自产出一段内容，边算边发会让前端收到交错拼接的答案。聚合与一次性下发由
-// runWorkflowQA 统一负责。
+// 生成内容在流式获取时实时推送增量分片（tool_chunk 与 thought），使用户在前端
+// 能够实时看到打字机过程，不再等待所有节点跑完才显示。
 //
 // @param ctx 节点执行上下文。
 // @param node 当前节点定义。
 // @param variables 上游上下文变量表。
+// @param toolCallID 当前节点的工具调用跟踪 ID。
 // @returns 节点执行结果；生成文本封装在 Text 与 Data["text"] 中。
 func (e *workflowExecutor) executeLLM(
-	ctx context.Context, node types.WorkflowNode, variables map[string]interface{},
+	ctx context.Context, node types.WorkflowNode, variables map[string]interface{}, toolCallID string,
 ) (workflowNodeExecution, error) {
 	var cfg types.WorkflowLLMNodeConfig
 	if err := json.Unmarshal(node.Config, &cfg); err != nil {
@@ -1233,10 +1343,33 @@ func (e *workflowExecutor) executeLLM(
 	for chunk := range stream {
 		if chunk.ResponseType == types.ResponseTypeThinking {
 			fullReasoning.WriteString(chunk.Content)
+			if chunk.Content != "" && e.eventBus != nil {
+				_ = e.eventBus.Emit(callCtx, event.Event{
+					ID:        uuid.NewString(),
+					Type:      event.EventAgentThought,
+					SessionID: e.sessionID,
+					RequestID: e.requestID,
+					Data: event.AgentThoughtData{
+						Content: chunk.Content,
+					},
+				})
+			}
 			continue
 		}
 		if chunk.Content != "" {
 			fullContent.WriteString(chunk.Content)
+			if e.eventBus != nil && toolCallID != "" {
+				_ = e.eventBus.Emit(callCtx, event.Event{
+					ID:        uuid.NewString(),
+					Type:      event.EventAgentToolChunk,
+					SessionID: e.sessionID,
+					RequestID: e.requestID,
+					Data: map[string]interface{}{
+						"tool_call_id": toolCallID,
+						"chunk":        chunk.Content,
+					},
+				})
+			}
 		}
 		if chunk.Usage != nil {
 			usage.Accumulate(*chunk.Usage)
@@ -1480,7 +1613,7 @@ func (e *workflowExecutor) executeTool(
 			return workflowNodeExecution{}, renderErr
 		}
 		state, execErr := e.runtime.ExecuteWorkflowSkill(
-			ctx, e.config, e.model, cfg.SkillName, task, e.sessionID, e.assistantMessage,
+			ctx, e.config, e.model, cfg.SkillName, task, e.sessionID, e.assistantMessage, e.eventBus,
 		)
 		if execErr != nil {
 			return workflowNodeExecution{}, execErr

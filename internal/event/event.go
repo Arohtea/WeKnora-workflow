@@ -52,6 +52,7 @@ const (
 	EventAgentThought       EventType = "thought"        // Agent 思考过程
 	EventAgentCommandOutput EventType = "command_output" // bounded command output
 	EventAgentToolCall      EventType = "tool_call"      // 工具调用通知
+	EventAgentToolChunk     EventType = "tool_chunk"     // 工具/节点实时输出增量分片
 	EventAgentToolResult    EventType = "tool_result"    // 工具结果
 	EventAgentReflection    EventType = "reflection"     // Agent 反思
 	EventAgentReferences    EventType = "references"     // 知识引用
