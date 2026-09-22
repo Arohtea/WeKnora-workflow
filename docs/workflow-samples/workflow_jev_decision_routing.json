@@ -1,0 +1,299 @@
+{
+  "$schema": "https://weknora.tencent.com/schemas/workflow-v1.json",
+  "version": "1.0",
+  "type": "weknora_workflow",
+  "exported_at": "2026-09-22T14:15:00.000Z",
+  "metadata": {
+    "name": "Jev 概率驱动智能工程规范与问答工作流",
+    "description": "基于 Jev (System One) 极速概率决策模型进行意图路由：精准识别文档编制需求、专业技术问答与通用咨询，分流执行规范文档合成或精准知识库问答。",
+    "version": 2,
+    "schema_version": 2
+  },
+  "workflow": {
+    "version": 2,
+    "schema_version": 2,
+    "viewport": {
+      "x": 80,
+      "y": 160,
+      "zoom": 0.65
+    },
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "name": "接收提问",
+        "branch_mode": "first_match",
+        "position": {
+          "x": -120,
+          "y": 300
+        },
+        "config": {}
+      },
+      {
+        "id": "jev-decision",
+        "type": "llm-decision",
+        "name": "Jev 意图与场景概率决策",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 180,
+          "y": 300
+        },
+        "config": {
+          "prompt": "根据用户输入：{{input.query}}\n\n请分析并判断用户的核心业务诉求，仅从以下三类分支中选择一个最匹配的标签返回：\n1. doc_generation：用户需要编写、编制、整理或生成结构化的工程规范、技术方案、试验大纲或汇总文档；\n2. qa_consultation：用户咨询具体的工程指标、实验参数、仪器规格或技术条款等具体问答；\n3. general_guidance：打招呼、通用问候或偏离专业工程规范的非技术性提问。",
+          "choices": [
+            "doc_generation",
+            "qa_consultation",
+            "general_guidance"
+          ]
+        }
+      },
+      {
+        "id": "llm-extract-keywords",
+        "type": "llm",
+        "name": "提炼核心关键词",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 540,
+          "y": 100
+        },
+        "config": {
+          "system_prompt": "你是一个专业的检索关键词提取助手。你的任务是从用户提问中提炼用于知识库检索的核心关键词。",
+          "prompt": "根据用户问题：{{input.query}}\n\n请提炼出 3-5 个最核心的检索关键词。\n严格遵循以下规则：\n1. 仅提取主语、核心检测方法与主题名词（例如：混凝土 RCM法 抗氯离子渗透 检测设备 规格）；\n2. 严禁展开具体的技术参数、型号、量程或数值（不要输出如 0-60V、±0.1V 等具体指标）；\n3. 关键词之间用单个空格隔开，直接输出关键词，严禁输出任何解释、标点或多余文字。",
+          "temperature": 0.3
+        }
+      },
+      {
+        "id": "retrieval-docs",
+        "type": "knowledge-retrieval",
+        "name": "检索规范知识库",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 880,
+          "y": 100
+        },
+        "config": {
+          "top_k": 5,
+          "query_template": "{{nodes.llm-extract-keywords.text}}",
+          "knowledge_base_ids": [
+            "2e4fd4f8-4ad2-47b1-8398-4aeab84ca6e0"
+          ]
+        }
+      },
+      {
+        "id": "tool-synthesizer",
+        "type": "tool",
+        "name": "规范文档合成技能",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1220,
+          "y": 100
+        },
+        "config": {
+          "kind": "skill",
+          "skill_name": "doc-synthesizer",
+          "tool_name": "",
+          "arguments": {},
+          "task_template": "用户提问：\n{{input.query}}\n\n知识库检索到的参考资料：\n{{nodes.retrieval-docs.text}}\n\n【禁止输出】系统和沙盒内部的链接，比如 resource:// 和 skill:// 开头的链接\n请基于以上检索到的资料，结合用户的提问，整理并生成一份结构完整、严谨专业的规范文档。"
+        }
+      },
+      {
+        "id": "end-doc",
+        "type": "end",
+        "name": "输出规范文档",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1560,
+          "y": 100
+        },
+        "config": {
+          "text_template": "{{nodes.tool-synthesizer.text}}"
+        }
+      },
+      {
+        "id": "retrieval-qa",
+        "type": "knowledge-retrieval",
+        "name": "检索问答知识库",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 540,
+          "y": 340
+        },
+        "config": {
+          "top_k": 4,
+          "query_template": "{{input.query}}",
+          "knowledge_base_ids": [
+            "2e4fd4f8-4ad2-47b1-8398-4aeab84ca6e0"
+          ]
+        }
+      },
+      {
+        "id": "llm-qa-answer",
+        "type": "llm",
+        "name": "专业技术解答",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 880,
+          "y": 340
+        },
+        "config": {
+          "system_prompt": "你是一名资深的工程技术与标准规范咨询专家，请根据检索到的权威资料提供严谨、准确、逻辑清晰的解答。",
+          "prompt": "用户技术咨询提问：\n{{input.query}}\n\n知识库检索到的参考条目：\n{{nodes.retrieval-qa.text}}\n\n请结合上述参考资料直接解答用户的技术问题。要求：\n1. 列出关键指标、参数范围、测试标准编号或具体要求；\n2. 结构清晰，分点阐述；\n3. 若资料中未提及相关内容，请明确告知并基于专业通识说明。",
+          "temperature": 0.3
+        }
+      },
+      {
+        "id": "end-qa",
+        "type": "end",
+        "name": "输出技术解答",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 1220,
+          "y": 340
+        },
+        "config": {
+          "text_template": "{{nodes.llm-qa-answer.text}}"
+        }
+      },
+      {
+        "id": "llm-guidance",
+        "type": "llm",
+        "name": "通用交流与引导",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 540,
+          "y": 560
+        },
+        "config": {
+          "system_prompt": "你是一个专业的工程规范与文档助手，能够亲切解答用户的通用提问并提供功能指引。",
+          "prompt": "用户提问：\n{{input.query}}\n\n请礼貌回应用户，并简要说明你能提供的帮助：\n1. 编制和整理工程规范文档（如：混凝土 RCM 检测规范、施工技术标准等）；\n2. 专项技术参数、试验方法与指标条款的技术咨询。\n请引导用户提出具体的技术问题。",
+          "temperature": 0.7
+        }
+      },
+      {
+        "id": "end-guidance",
+        "type": "end",
+        "name": "输出引导建议",
+        "branch_mode": "first_match",
+        "position": {
+          "x": 880,
+          "y": 560
+        },
+        "config": {
+          "text_template": "{{nodes.llm-guidance.text}}"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-start-to-jev",
+        "source": "start",
+        "target": "jev-decision",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-jev-to-doc",
+        "source": "jev-decision",
+        "target": "llm-extract-keywords",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "nodes.jev-decision.data.choice",
+              "operator": "eq",
+              "value": "doc_generation"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-keywords-to-retrieval",
+        "source": "llm-extract-keywords",
+        "target": "retrieval-docs",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-retrieval-to-tool",
+        "source": "retrieval-docs",
+        "target": "tool-synthesizer",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-tool-to-end-doc",
+        "source": "tool-synthesizer",
+        "target": "end-doc",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-jev-to-qa",
+        "source": "jev-decision",
+        "target": "retrieval-qa",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 1,
+        "is_default": false,
+        "condition": {
+          "mode": "all",
+          "items": [
+            {
+              "variable": "nodes.jev-decision.data.choice",
+              "operator": "eq",
+              "value": "qa_consultation"
+            }
+          ]
+        }
+      },
+      {
+        "id": "edge-retrieval-to-qa-llm",
+        "source": "retrieval-qa",
+        "target": "llm-qa-answer",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-qa-to-end-qa",
+        "source": "llm-qa-answer",
+        "target": "end-qa",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      },
+      {
+        "id": "edge-jev-to-guidance",
+        "source": "jev-decision",
+        "target": "llm-guidance",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 2,
+        "is_default": true
+      },
+      {
+        "id": "edge-guidance-to-end",
+        "source": "llm-guidance",
+        "target": "end-guidance",
+        "source_handle": "right",
+        "target_handle": "left",
+        "order": 0,
+        "is_default": false
+      }
+    ]
+  }
+}

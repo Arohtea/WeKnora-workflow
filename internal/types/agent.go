@@ -456,13 +456,13 @@ func (s *AgentStep) GetObservations() []string {
 
 // AgentState tracks the execution state of an agent across iterations
 type AgentState struct {
-	PendingSteerMessages []string         `json:"-"`
-	CurrentRound         int              `json:"current_round"`  // Current round number
-	RoundSteps           []AgentStep      `json:"round_steps"`    // All steps taken so far in the current round
-	IsComplete           bool             `json:"is_complete"`    // Whether agent has finished
-	FinalAnswer          string           `json:"final_answer"`   // The final answer to the query
-	KnowledgeRefs        []*SearchResult  `json:"knowledge_refs"` // Collected knowledge references
-	TurnUsage            TokenUsage       `json:"turn_usage"`     // LLM usage accumulated across this turn
+	PendingSteerMessages []string        `json:"-"`
+	CurrentRound         int             `json:"current_round"`  // Current round number
+	RoundSteps           []AgentStep     `json:"round_steps"`    // All steps taken so far in the current round
+	IsComplete           bool            `json:"is_complete"`    // Whether agent has finished
+	FinalAnswer          string          `json:"final_answer"`   // The final answer to the query
+	KnowledgeRefs        []*SearchResult `json:"knowledge_refs"` // Collected knowledge references
+	TurnUsage            TokenUsage      `json:"turn_usage"`     // LLM usage accumulated across this turn
 	// Artifacts 是 skill 子 Agent 在本轮执行期间通过 ArtifactCollector 收集到的沙箱产物文件。
 	// 由 sessionService 在 ExecuteWorkflowSkill 返回后填充，工作流引擎读取后追加到最终输出。
 	Artifacts MessageArtifacts `json:"artifacts,omitempty"`

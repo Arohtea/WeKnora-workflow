@@ -653,6 +653,15 @@ const fallbackProviderOptions = computed(() => [
     modelTypes: ['chat', 'embedding', 'vllm']
   },
   {
+    value: 'jev',
+    label: t('model.editor.providers.jev.label'),
+    defaultUrls: {
+      chat: 'https://api.typesafe.ai/v1/systemone',
+    },
+    description: t('model.editor.providers.jev.description'),
+    modelTypes: ['chat']
+  },
+  {
     value: 'generic',
     label: t('model.editor.providers.generic.label'),
     defaultUrls: {},
@@ -1246,6 +1255,9 @@ const handleProviderChange = (value: string) => {
     }
     if (value === 'volcengine' && activeModelType.value === 'rerank' && !formData.value.modelName?.trim()) {
       formData.value.modelName = 'doubao-seed-rerank'
+    }
+    if (value === 'jev' && !formData.value.modelName?.trim()) {
+      formData.value.modelName = 'jev-latest'
     }
     // 重置校验状态
     remoteChecked.value = false

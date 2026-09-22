@@ -594,6 +594,31 @@
             <div class="workflow-inspector-section">
               <div class="workflow-section-title">分支判断设置</div>
               <div class="workflow-field">
+                <span class="workflow-field-label">判断模型（可选）</span>
+                <select
+                  :value="configString('model_id')"
+                  :disabled="disabled"
+                  class="workflow-input"
+                  @change="updateConfig('model_id', inputValue($event))"
+                >
+                  <option value="">跟随智能体主模型 (默认)</option>
+                  <option
+                    v-for="m in availableChatModels"
+                    :key="m.id"
+                    :value="m.id"
+                  >
+                    {{ m.parameters?.provider === 'jev' ? `${m.display_name || m.name} (Jev 概率模型)` : (m.display_name || m.name) }}
+                  </option>
+                </select>
+                <div v-if="isCurrentDecisionJevModel" class="workflow-field-hint-box">
+                  <span class="hint-title">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-zap" style="vertical-align: -2px; margin-right: 4px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                    已启用 Jev 结构化概率分支判断
+                  </span>
+                  <p class="hint-desc">Jev (System One) 拥有极快的判断响应速度，输出包含 <code>choice</code>（命中分支）、<code>confidence</code>（置信度 0~1）和 <code>probabilities</code>（各选项概率分布）。</p>
+                </div>
+              </div>
+              <div class="workflow-field">
                 <span class="workflow-field-label">判断提示词 <em class="workflow-required">*</em></span>
                 <textarea
                   :value="configString('prompt')"
@@ -630,7 +655,7 @@
                   placeholder="通过&#10;拒绝"
                   @input="updateDecisionChoices(inputValue($event))"
                 />
-                <small class="workflow-field-help">每行一个候选分支标签；决策输出可通过 <code>nodes.{{ selectedNode.id }}.data.choice</code> 配合连线条件实现分支路由。</small>
+                <small class="workflow-field-help">每行一个候选分支标签；决策输出可通过 <code>nodes.{{ selectedNode.id }}.data.choice</code> 配合连线条件实现分支路由。若使用 Jev 模型，还可在条件中读取 <code>nodes.{{ selectedNode.id }}.data.confidence</code>。</small>
               </div>
             </div>
           </template>
@@ -1504,6 +1529,7 @@ import {
   startWorkflowDebugRun,
   validateWorkflowDefinition,
 } from '@/api/agent';
+import { listModels, type ModelConfig } from '@/api/model';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 import '@vue-flow/controls/dist/style.css';
@@ -2187,8 +2213,16 @@ function handleKeyDown(event: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
+const availableChatModels = ref<ModelConfig[]>([]);
+
+onMounted(async () => {
   window.addEventListener('keydown', handleKeyDown);
+  try {
+    const models = await listModels('KnowledgeQA');
+    availableChatModels.value = models || [];
+  } catch (err) {
+    console.warn('Failed to load chat models for workflow editor:', err);
+  }
 });
 
 onBeforeUnmount(() => {
@@ -2239,6 +2273,13 @@ const toolKind = computed(() => configString('kind', 'builtin'));
 const retrievalKnowledgeBaseIDs = computed(() => {
   const value = selectedNodeConfig.value.knowledge_base_ids;
   return Array.isArray(value) ? value.map(String) : [];
+});
+const isCurrentDecisionJevModel = computed(() => {
+  if (selectedNode.value?.data?.workflowType !== 'llm-decision') return false;
+  const modelId = configString('model_id');
+  if (!modelId) return false;
+  const found = availableChatModels.value.find((m) => m.id === modelId);
+  return found?.parameters?.provider === 'jev' || found?.name?.toLowerCase().includes('jev');
 });
 const decisionChoicesText = computed(() => {
   const choices = selectedNodeConfig.value.choices;
@@ -2519,6 +2560,22 @@ function getNodeOutputFields(node: EditorNode | WorkflowNode | { id: string; dat
         label: '判定简要理由',
         type: 'string',
         desc: '大模型做出该分支判定的简要理由分析',
+      },
+      {
+        key: 'confidence',
+        fullPath: `nodes.${nodeId}.data.confidence`,
+        templateSyntax: `{{nodes.${nodeId}.data.confidence}}`,
+        label: '置信度 (Jev)',
+        type: 'number',
+        desc: 'Jev 概率模型判定的决策置信度数值 (0 ~ 1)',
+      },
+      {
+        key: 'probabilities',
+        fullPath: `nodes.${nodeId}.data.probabilities`,
+        templateSyntax: `{{nodes.${nodeId}.data.probabilities}}`,
+        label: '概率分布 (Jev)',
+        type: 'object',
+        desc: 'Jev 概率模型输出的各个分支选项候选概率分布对象',
       },
       {
         key: 'status',
@@ -6043,6 +6100,47 @@ defineExpose({
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
     color: var(--td-brand-color);
+  }
+}
+
+.workflow-field-hint-box {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #7c3aed 6%, var(--td-bg-color-container));
+  border: 1px solid color-mix(in srgb, #7c3aed 25%, transparent);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+
+  .hint-title {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: #7c3aed;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+
+    svg {
+      color: #7c3aed;
+      flex-shrink: 0;
+    }
+  }
+
+  .hint-desc {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--td-text-color-secondary);
+
+    code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: color-mix(in srgb, #7c3aed 10%, var(--td-bg-color-container));
+      border: 1px solid color-mix(in srgb, #7c3aed 20%, transparent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: #6d28d9;
+    }
   }
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/rerank"
 	"github.com/Tencent/WeKnora/internal/types"
+	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	workflowruntime "github.com/Tencent/WeKnora/internal/workflow"
 	"github.com/google/uuid"
@@ -84,6 +85,7 @@ type workflowExecutor struct {
 	config           *types.AgentConfig
 	model            chat.Chat
 	rerankModel      rerank.Reranker
+	modelService     interfaces.ModelService
 	definition       *types.WorkflowDefinition
 	eventBus         *event.EventBus
 	observer         *workflowRunObserver
@@ -232,6 +234,7 @@ func (s *sessionService) runWorkflowQA(
 		config:             agentConfig,
 		model:              summaryModel,
 		rerankModel:        rerankModel,
+		modelService:       s.modelService,
 		definition:         definition,
 		eventBus:           eventBus,
 		observer:           observer,
@@ -1413,6 +1416,42 @@ func (e *workflowExecutor) executeLLMDecision(
 	for _, choice := range cfg.Choices {
 		choices = append(choices, strings.TrimSpace(choice))
 	}
+	callCtx, cancel := context.WithTimeout(ctx, workflowLLMTimeout)
+	defer cancel()
+
+	// 1. 优先解析节点独立指定的决策模型（如专门配置的 Jev 决策模型）
+	decisionModel := e.model
+	if cfg.ModelID != "" && e.modelService != nil {
+		if resolved, resolveErr := e.modelService.GetChatModel(ctx, cfg.ModelID); resolveErr == nil && resolved != nil {
+			decisionModel = resolved
+		} else {
+			logger.Warnf(ctx, "Failed to resolve decision model %s for node %s: %v; falling back to agent model", cfg.ModelID, node.ID, resolveErr)
+		}
+	}
+
+	// 2. 如果决策模型支持 Jev 原生概率决策，直接执行原生分类并返回结构化置信度与概率
+	if jevCaller, ok := decisionModel.(chat.JevDecisionCaller); ok && len(choices) >= 2 {
+		decisionResult, jevErr := jevCaller.Decision(callCtx, prompt, choices)
+		if jevErr == nil && decisionResult != nil && decisionResult.Choice != "" {
+			data := map[string]interface{}{
+				"choice":        decisionResult.Choice,
+				"confidence":    decisionResult.Confidence,
+				"probabilities": decisionResult.Probabilities,
+				"model":         decisionResult.Model,
+				"reason":        "由 Jev System One 概率决策模型评估得出",
+				"engine":        "jev",
+			}
+			return workflowNodeExecution{
+				output: &types.WorkflowNodeOutput{Text: decisionResult.Choice, Data: data, Status: "success"},
+				result: &types.ToolResult{Success: true, Output: decisionResult.Choice, Data: data},
+				usage:  decisionResult.Usage,
+			}, nil
+		}
+		if jevErr != nil {
+			logger.Warnf(ctx, "Jev native decision failed for node %s: %v; falling back to chat", node.ID, jevErr)
+		}
+	}
+
 	system := "你是工作流路由判断器。只能从候选标签中选择一个，并且必须只返回 JSON：{" +
 		"\"choice\":\"候选标签\",\"reason\":\"简短理由\"}。候选标签：" + strings.Join(choices, ", ")
 	messages := []chat.Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}}
@@ -1424,9 +1463,7 @@ func (e *workflowExecutor) executeLLMDecision(
 		Format:              json.RawMessage(`{"type":"json_object"}`),
 		PromptCacheKey:      e.sessionID,
 	}
-	callCtx, cancel := context.WithTimeout(ctx, workflowLLMTimeout)
-	defer cancel()
-	response, err := e.model.Chat(callCtx, messages, options)
+	response, err := decisionModel.Chat(callCtx, messages, options)
 	if err != nil {
 		return workflowNodeExecution{}, err
 	}
@@ -1443,7 +1480,7 @@ func (e *workflowExecutor) executeLLMDecision(
 			{Role: "user", Content: prompt},
 			{Role: "user", Content: correction},
 		}
-		retryResponse, retryErr := e.model.Chat(callCtx, retryMessages, options)
+		retryResponse, retryErr := decisionModel.Chat(callCtx, retryMessages, options)
 		if retryErr != nil {
 			return workflowNodeExecution{usage: usage}, retryErr
 		}

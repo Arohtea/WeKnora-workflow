@@ -120,6 +120,7 @@ type WorkflowLLMNodeConfig struct {
 type WorkflowLLMDecisionNodeConfig struct {
 	Prompt  string   `yaml:"prompt" json:"prompt"`
 	Choices []string `yaml:"choices" json:"choices"`
+	ModelID string   `yaml:"model_id,omitempty" json:"model_id,omitempty"`
 }
 
 // WorkflowHTTPNodeConfig 控制受限 HTTP 请求。

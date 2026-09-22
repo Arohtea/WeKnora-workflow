@@ -194,5 +194,8 @@ func NewRemoteChat(config *ChatConfig) (Chat, error) {
 	if providerName == provider.ProviderAnthropic {
 		return NewAnthropicChat(config)
 	}
+	if providerName == provider.ProviderJev {
+		return NewJevChat(config)
+	}
 	return NewRemoteAPIChat(config)
 }

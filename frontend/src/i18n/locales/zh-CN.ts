@@ -2769,6 +2769,10 @@ export default {
         openai: {
           label: 'OpenAI',
           description: 'gpt-5.2, gpt-5-mini, etc.'
+        },
+        jev: {
+          label: 'Jev (TypeSafe)',
+          description: 'TypeSafe Jev (System One) 结构化概率决策与分类模型，专用于工作流分支判断'
         }
       },
       validation: {

@@ -4624,6 +4624,10 @@ export default {
           label: 'OpenAI',
           description: 'gpt-5.2, gpt-5-mini, etc.'
         },
+        jev: {
+          label: 'Jev (TypeSafe)',
+          description: 'TypeSafe Jev (System One) structured probabilistic decision & classification model for workflow routing'
+        },
         anthropic: {
           label: 'Anthropic',
           description: 'Claude models via native Anthropic Messages API'

@@ -97,6 +97,7 @@ func AllProviders() []ProviderName {
 		ProviderNvidia,
 		ProviderNovita,
 		ProviderAzureOpenAI,
+		ProviderJev,
 	}
 }
 
@@ -279,6 +280,8 @@ func DetectProvider(baseURL string) ProviderName {
 		return ProviderNovita
 	case containsAny(baseURL, "weknora.weixin.qq.com"):
 		return ProviderWeKnoraCloud
+	case containsAny(baseURL, "typesafe.ai", "systemone"):
+		return ProviderJev
 	default:
 		return ProviderGeneric
 	}
