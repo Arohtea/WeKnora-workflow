@@ -1011,7 +1011,18 @@
                 <t-icon name="fork" size="14px" />
                 <span>分支连线</span>
               </div>
-              <h3 class="workflow-inspector-title">{{ selectedEdge.source }} → {{ selectedEdge.target }}</h3>
+              <h3 class="workflow-inspector-title">{{ getNodeName(selectedEdge.source) }} → {{ getNodeName(selectedEdge.target) }}</h3>
+              <div class="workflow-edge-endpoints-row">
+                <span class="workflow-edge-endpoint-chip" :title="`起点节点: ${getNodeName(selectedEdge.source)} (${selectedEdge.source})`">
+                  <span class="workflow-edge-endpoint-dot workflow-edge-endpoint-dot--source" />
+                  <code>{{ selectedEdge.source }}</code>
+                </span>
+                <t-icon name="arrow-right" size="12px" class="workflow-edge-arrow-icon" />
+                <span class="workflow-edge-endpoint-chip" :title="`终点节点: ${getNodeName(selectedEdge.target)} (${selectedEdge.target})`">
+                  <span class="workflow-edge-endpoint-dot workflow-edge-endpoint-dot--target" />
+                  <code>{{ selectedEdge.target }}</code>
+                </span>
+              </div>
             </div>
             <button
               v-if="!disabled"
@@ -1072,6 +1083,8 @@
                       :disabled="disabled"
                       size="small"
                       placeholder="判断变量"
+                      :auto-width="false"
+                      class="workflow-condition-select-var"
                       @change="updateConditionItem(index, 'variable', String($event))"
                     >
                       <t-option
@@ -1086,19 +1099,26 @@
                       :disabled="disabled"
                       size="small"
                       placeholder="操作符"
+                      :auto-width="false"
+                      class="workflow-condition-select-op"
                       @change="updateConditionItem(index, 'operator', String($event))"
                     >
                       <t-option v-for="operator in conditionOperators" :key="operator.value" :value="operator.value" :label="operator.label" />
                     </t-select>
                   </div>
+                  <div v-if="item.operator === 'is_empty' || item.operator === 'is_not_empty'" class="workflow-condition-unary-hint">
+                    <t-icon name="info-circle" size="13px" />
+                    <span>自动判断是否为空，无需比较值</span>
+                  </div>
                   <input
+                    v-else
                     :value="conditionValue(item.value)"
                     :disabled="disabled"
                     class="workflow-input workflow-input--small"
                     placeholder="目标比较值..."
                     @input="updateConditionItem(index, 'value', inputValue($event))"
                   />
-                  <div v-if="edgeSourceDecisionChoices.length" class="workflow-quick-choices">
+                  <div v-if="edgeSourceDecisionChoices.length && item.operator !== 'is_empty' && item.operator !== 'is_not_empty'" class="workflow-quick-choices">
                     <span class="workflow-quick-choices-title">快捷填入分支标签：</span>
                     <div class="workflow-quick-choice-chips">
                       <button
@@ -1106,6 +1126,7 @@
                         :key="choice"
                         type="button"
                         class="workflow-quick-choice-chip"
+                        :class="{ 'workflow-quick-choice-chip--active': conditionValue(item.value) === choice }"
                         :disabled="disabled"
                         :title="`点击填入比较值：${choice}`"
                         @click="updateConditionItem(index, 'value', choice)"
@@ -1485,6 +1506,8 @@ import {
 } from '@/api/agent';
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
+import '@vue-flow/controls/dist/style.css';
+import '@vue-flow/minimap/dist/style.css';
 import {
   WORKFLOW_TEMPLATES,
   isUntouchedDefinition,
@@ -1795,6 +1818,90 @@ function nodeClass(type: WorkflowNodeType): string {
   return `workflow-flow-node workflow-flow-node--${type}`;
 }
 
+/**
+ * 获取指定节点的展示名称（若找不到节点则回退至节点 ID）。
+ */
+function getNodeName(nodeId?: string): string {
+  if (!nodeId) return '';
+  const node = flowNodes.value.find((n) => n.id === nodeId);
+  return node?.data?.name || nodeId;
+}
+
+/**
+ * 智能计算连线在画布上展示的文字标签。
+ * - 默认分支：展示“默认”；
+ * - 决策分支（LLM decision）：优先展示匹配的候选分支标签；
+ * - 单条件分支：若已填写目标值展示如“query = 苹果”，若单目运算符展示“为空/非空”，未填值展示“待设条件”；
+ * - 多条件分支：展示“N项条件 (AND/OR)”；
+ * - 新建未设分支：展示“条件分支”。
+ */
+function computeEdgeLabel(edge: {
+  is_default?: boolean;
+  data?: { is_default?: boolean; condition?: WorkflowCondition; order?: number };
+  condition?: WorkflowCondition;
+  source?: string;
+}): string {
+  const isDefault = edge.is_default ?? edge.data?.is_default;
+  if (isDefault) return '默认';
+
+  const condition = edge.condition || edge.data?.condition;
+  if (!condition || !Array.isArray(condition.items) || condition.items.length === 0) {
+    return '条件分支';
+  }
+
+  const items = condition.items;
+  if (items.length === 1) {
+    const item = items[0];
+    const op = item.operator;
+    const opLabel = conditionOperatorLabels[op as keyof typeof conditionOperatorLabels] || op || '等于';
+
+    if (op === 'is_empty') return '为空';
+    if (op === 'is_not_empty') return '非空';
+
+    const rawVal = item.value;
+    const valStr = (rawVal == null ? '' : typeof rawVal === 'string' ? rawVal : JSON.stringify(rawVal)).trim();
+    if (!valStr) {
+      return '待设条件';
+    }
+
+    const sourceNode = flowNodes.value.find((n) => n.id === edge.source);
+    if (sourceNode?.data?.workflowType === 'llm-decision' && (item.variable.endsWith('.choice') || item.variable === 'choice')) {
+      return valStr.length > 12 ? `${valStr.slice(0, 12)}...` : valStr;
+    }
+
+    let varName = item.variable;
+    if (varName.startsWith('nodes.')) {
+      const parts = varName.split('.');
+      const nId = parts[1];
+      const n = flowNodes.value.find((x) => x.id === nId);
+      const field = parts.slice(2).join('.');
+      varName = n ? `${n.data.name}.${field}` : field;
+    } else if (varName.startsWith('input.')) {
+      varName = varName.replace('input.', '');
+    }
+
+    let opSymbol = opLabel;
+    if (op === 'eq') opSymbol = '=';
+    else if (op === 'neq') opSymbol = '≠';
+    else if (op === 'gt') opSymbol = '>';
+    else if (op === 'gte') opSymbol = '≥';
+    else if (op === 'lt') opSymbol = '<';
+    else if (op === 'lte') opSymbol = '≤';
+
+    const brief = `${varName} ${opSymbol} ${valStr}`;
+    return brief.length > 16 ? `${brief.slice(0, 16)}...` : brief;
+  }
+
+  return `${items.length}项条件 (${condition.mode === 'any' ? 'OR' : 'AND'})`;
+}
+
+/** 刷新所有连线的展示标签（例如当上游节点改名或规则变更时） */
+function refreshAllEdgeLabels() {
+  for (const edge of flowEdges.value) {
+    edge.label = computeEdgeLabel(edge);
+  }
+}
+
 function loadDefinition(value?: WorkflowDefinition | null) {
   const definition = normalizeDefinition(value);
   applyingModel.value = true;
@@ -1817,7 +1924,7 @@ function loadDefinition(value?: WorkflowDefinition | null) {
     targetHandle: edge.target_handle || 'left',
     type: 'smoothstep',
     markerEnd: MarkerType.ArrowClosed,
-    label: edge.is_default ? '默认' : '',
+    label: computeEdgeLabel(edge),
     data: {
       order: edge.order,
       is_default: !!edge.is_default,
@@ -1963,7 +2070,7 @@ function restoreSnapshot(snapshotStr: string) {
       targetHandle: edge.target_handle || 'left',
       type: 'smoothstep',
       markerEnd: MarkerType.ArrowClosed,
-      label: edge.is_default ? '默认' : '',
+      label: computeEdgeLabel(edge),
       data: {
         order: edge.order,
         is_default: !!edge.is_default,
@@ -2830,6 +2937,7 @@ function updateSelectedNode(mutator: (node: EditorNode) => void) {
 
 function updateNodeName(name: string) {
   updateSelectedNode((node) => { node.data.name = name.trim() || node.id; });
+  refreshAllEdgeLabels();
 }
 
 /**
@@ -2929,11 +3037,14 @@ function changeMCPService(serviceID: string) {
   });
 }
 
-function updateSelectedEdge(mutator: (edge: EditorEdge) => void) {
+function updateSelectedEdge(mutator: (edge: EditorEdge) => void, recordSnapshot = true) {
   if (props.disabled || !selectedEdge.value) return;
+  if (recordSnapshot) {
+    pushSnapshot();
+  }
   const edge = selectedEdge.value;
   mutator(edge);
-  edge.label = edge.data?.is_default ? '默认' : '';
+  edge.label = computeEdgeLabel(edge);
   emitDefinition();
 }
 
@@ -2941,7 +3052,7 @@ function updateEdgeDefault(value: boolean) {
   updateSelectedEdge((edge) => {
     edge.data = { ...(edge.data || { order: 0 }), is_default: value };
     if (value) edge.data.condition = undefined;
-  });
+  }, true);
 }
 
 function updateEdgeConditionMode(mode: string) {
@@ -2950,17 +3061,30 @@ function updateEdgeConditionMode(mode: string) {
       ...(edge.data || { order: 0, is_default: false }),
       condition: { mode: mode === 'any' ? 'any' : 'all', items: clone(edge.data?.condition?.items || [{ variable: defaultConditionVariable.value, operator: 'eq', value: '' }]) },
     };
-  });
+  }, true);
 }
 
 function updateConditionItem(index: number, key: keyof WorkflowConditionItem, value: unknown) {
-  updateSelectedEdge((edge) => {
-    const condition = edge.data?.condition || { mode: 'all', items: [] };
-    const items = [...condition.items];
-    const nextValue = key === 'value' && typeof value === 'string' ? parseConditionValue(value) : value;
-    items[index] = { ...items[index], [key]: nextValue };
-    edge.data = { ...(edge.data || { order: 0, is_default: false }), condition: { ...condition, items } };
-  });
+  if (key === 'value') {
+    pushSnapshotDebounced();
+    updateSelectedEdge((edge) => {
+      const condition = edge.data?.condition || { mode: 'all', items: [] };
+      const items = [...condition.items];
+      const nextValue = typeof value === 'string' ? parseConditionValue(value) : value;
+      items[index] = { ...items[index], [key]: nextValue };
+      edge.data = { ...(edge.data || { order: 0, is_default: false }), condition: { ...condition, items } };
+    }, false);
+  } else {
+    updateSelectedEdge((edge) => {
+      const condition = edge.data?.condition || { mode: 'all', items: [] };
+      const items = [...condition.items];
+      items[index] = { ...items[index], [key]: value };
+      if (key === 'operator' && (value === 'is_empty' || value === 'is_not_empty')) {
+        items[index].value = '';
+      }
+      edge.data = { ...(edge.data || { order: 0, is_default: false }), condition: { ...condition, items } };
+    }, true);
+  }
 }
 
 function addConditionItem() {
@@ -2973,7 +3097,7 @@ function addConditionItem() {
         items: [...condition.items, { variable: defaultConditionVariable.value, operator: 'eq', value: '' }],
       },
     };
-  });
+  }, true);
 }
 
 function removeConditionItem(index: number) {
@@ -2982,7 +3106,7 @@ function removeConditionItem(index: number) {
     if (!condition) return;
     const items = condition.items.filter((_item: WorkflowConditionItem, itemIndex: number) => itemIndex !== index);
     edge.data = { ...(edge.data || { order: 0, is_default: false }), condition: items.length ? { ...condition, items } : undefined };
-  });
+  }, true);
 }
 
 function conditionValue(value: unknown): string {
@@ -3268,7 +3392,7 @@ function onConnect(connection: Connection) {
     type: 'smoothstep',
     markerEnd: MarkerType.ArrowClosed,
     data: { order, is_default: order === 0 },
-    label: order === 0 ? '默认' : '',
+    label: computeEdgeLabel({ is_default: order === 0, source: connection.source }),
     deletable: true,
   };
   flowEdges.value.push(edge);
@@ -5439,6 +5563,51 @@ defineExpose({
     fill: var(--td-brand-color, #0052d9) !important;
   }
 
+  :deep(.vue-flow__edge-textwrapper) {
+    pointer-events: all;
+    cursor: pointer;
+  }
+
+  :deep(.vue-flow__edge-textbg) {
+    fill: #ffffff;
+    stroke: #e2e8f0;
+    stroke-width: 1px;
+    rx: 6px;
+    ry: 6px;
+    filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.08));
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  :deep(.vue-flow__edge-text) {
+    fill: #475569;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    user-select: none;
+    transition: fill 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  :deep(.vue-flow__edge:hover .vue-flow__edge-textbg) {
+    stroke: #94a3b8;
+    filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.12));
+  }
+
+  :deep(.vue-flow__edge:hover .vue-flow__edge-text) {
+    fill: #0f172a;
+  }
+
+  :deep(.vue-flow__edge.selected .vue-flow__edge-textbg) {
+    fill: #f0f7ff;
+    stroke: var(--td-brand-color, #0052d9);
+    stroke-width: 1.5px;
+    filter: drop-shadow(0 2px 8px rgba(0, 82, 217, 0.22));
+  }
+
+  :deep(.vue-flow__edge.selected .vue-flow__edge-text) {
+    fill: var(--td-brand-color, #0052d9);
+    font-weight: 600;
+  }
+
   :deep(.vue-flow__connection-path) {
     stroke: var(--td-brand-color, #0052d9);
     stroke-width: 2px;
@@ -5688,6 +5857,7 @@ defineExpose({
   flex-direction: column;
   min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   border-left: 1px solid var(--td-component-stroke);
   background: var(--td-bg-color-container);
@@ -5738,6 +5908,47 @@ defineExpose({
 
 .workflow-node-id-row {
   margin-top: 5px;
+}
+
+.workflow-edge-endpoints-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.workflow-edge-endpoint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 4px;
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.3;
+
+  code {
+    font-family: inherit;
+    color: var(--td-text-color-primary);
+  }
+}
+
+.workflow-edge-endpoint-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+
+  &--source { background: #059669; }
+  &--target { background: #0284c7; }
+}
+
+.workflow-edge-arrow-icon {
+  color: var(--td-text-color-placeholder);
+  flex-shrink: 0;
 }
 
 .workflow-node-id-chip {
@@ -6203,6 +6414,14 @@ defineExpose({
     border-style: solid;
   }
 
+  &--active {
+    background: var(--td-brand-color);
+    color: #fff;
+    border-style: solid;
+    font-weight: 600;
+    box-shadow: 0 1px 4px rgba(0, 82, 217, 0.25);
+  }
+
   &:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -6241,7 +6460,7 @@ defineExpose({
 }
 
 .workflow-condition-card {
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--td-component-stroke);
   border-radius: 6px;
   background: var(--td-bg-color-container);
@@ -6280,9 +6499,43 @@ defineExpose({
 
 .workflow-condition-row-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) 104px;
+  gap: 8px;
+  margin-bottom: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.workflow-condition-select-var,
+.workflow-condition-select-op {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.workflow-condition-select-var :deep(.t-input),
+.workflow-condition-select-op :deep(.t-input) {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.workflow-condition-select-var :deep(.t-input__inner),
+.workflow-condition-select-op :deep(.t-input__inner) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-condition-unary-hint {
+  display: flex;
+  align-items: center;
   gap: 6px;
-  margin-bottom: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px dashed var(--td-component-stroke);
 }
 
 /* 空状态指示 */
